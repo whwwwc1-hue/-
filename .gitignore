@@ -1,0 +1,24 @@
+# Dependencies & build outputs
+frontend-web/node_modules/
+frontend-web/dist/
+backend-cangjie/target/
+backend-cangjie/.temp/
+
+# Local env & per-query SQL scratch files (never commit real credentials)
+backend-cangjie/.env
+backend-cangjie/tmp_sql/
+tmp_sql/
+.env.local
+
+# Runtime database files & large SDK archives
+mysql-data/
+*.zip
+*.log
+*.exe
+*.dll
+
+# IDE & OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
