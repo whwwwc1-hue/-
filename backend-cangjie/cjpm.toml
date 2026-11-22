@@ -1,0 +1,13 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "hrms_backend"
+  description = "HRMS Backend written in Cangjie"
+  version = "1.0.0"
+  output-type = "executable"
+  src-dir = "src"
+
+[dependencies]
+
+[target.x86_64-w64-mingw32]
+  [target.x86_64-w64-mingw32.bin-dependencies]
+    path-option = ["D:\\cangjie-stdx\\windows_x86_64_cjnative\\dynamic\\stdx"]
