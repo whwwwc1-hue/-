@@ -197,7 +197,7 @@ public func handlePayrollPaySingle(ctx: HttpContext, payrollId: Int64): Unit {
     match (requireRoles(ctx, ["ADMIN", "HR"])) {
         case None => return
         case Some(u) =>
-            let rows = queryRows("SELECT p.status, p.pay_month, e.name, p.net_salary FROM hr_payroll p LEFT JOIN hr_employee e ON p.employee_id = e.id WHERE p.id = ${payrollId} LIMIT 1")
+            let rows = queryRows("SELECT p.status, p.pay_month, e.name, p.net_salary, p.employee_id FROM hr_payroll p LEFT JOIN hr_employee e ON p.employee_id = e.id WHERE p.id = ${payrollId} LIMIT 1")
             if (rows.size == 0) {
                 sendErr(ctx, 404, 404, "工资单不存在")
                 return
@@ -208,6 +208,9 @@ public func handlePayrollPaySingle(ctx: HttpContext, payrollId: Int64): Unit {
             }
             executeSql("UPDATE hr_payroll SET status='PAID', paid_at=NOW() WHERE id=${payrollId}")
             writeAuditLog(u, "薪酬管理", "发放工资", "确认发放 ${rows[0][2]} (${rows[0][1]}) 实发 ${rows[0][3]} 元")
+            // P3.2：工资条发放后给该员工推一条站内通知，refId = 工资单ID，前端据此跳「我的工资条」。
+            // 新列追加在 SELECT 末尾（索引 4），不动 [0]..[3] 的既有下标，避免把上面的审计文案改错行。
+            notifyPayrollPaid(Int64.tryParse(rows[0][4]) ?? 0, payrollId, rows[0][1])
             sendOk(ctx, "null")
     }
 }
@@ -227,8 +230,12 @@ public func handlePayrollBatchPay(ctx: HttpContext): Unit {
                         return
                     }
                     let cnt = querySingleInt("SELECT COUNT(*) FROM hr_payroll WHERE pay_month = ${sqlStr(payMonth)} AND status = 'DRAFT'", 0)
+                    // P3.2：批量发薪的通知必须**在 UPDATE 之前**取待发放的行，
+                    // 更新后就查不到 status='DRAFT' 了（PAID 也算已发放，二次点按钮会重复推）。
+                    let payRows = queryRows("SELECT id, employee_id FROM hr_payroll WHERE pay_month = ${sqlStr(payMonth)} AND status = 'DRAFT'")
                     executeSql("UPDATE hr_payroll SET status='PAID', paid_at=NOW() WHERE pay_month=${sqlStr(payMonth)} AND status='DRAFT'")
                     writeAuditLog(u, "薪酬管理", "批量发薪", "批量发放 ${payMonth} 月度工资单，共 ${cnt} 笔")
+                    notifyPayrollBatchPaid(payRows, payMonth)
                     sendOk(ctx, "{\"paidCount\":${cnt}}")
             }
     }

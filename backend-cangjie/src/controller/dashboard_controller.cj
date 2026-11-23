@@ -10,7 +10,7 @@ import hrms_backend.middleware.*
 public func handleDashboardOverview(ctx: HttpContext): Unit {
     match (requireAuth(ctx)) {
         case None => return
-        case Some(_) =>
+        case Some(u) =>
             let totalActive = querySingleInt("SELECT COUNT(*) FROM hr_employee WHERE status != 'RESIGNED'", 0)
             let monthlyHires = querySingleInt("SELECT COUNT(*) FROM hr_employee WHERE DATE_FORMAT(hire_date, '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m')", 0)
             let monthlyResigns = querySingleInt("SELECT COUNT(*) FROM hr_employee WHERE status = 'RESIGNED' AND DATE_FORMAT(resign_date, '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m')", 0)
@@ -36,6 +36,14 @@ ORDER BY e.contract_end_date ASC
             let expList = ArrayList<String>()
             for (r in expRows) {
                 expList.add("{\"id\":${r[0]},\"empNo\":${jsonStr(r[1])},\"name\":${jsonStr(r[2])},\"deptName\":${jsonStr(r[3])},\"positionName\":${jsonStr(r[4])},\"contractEndDate\":${jsonStr(r[5])},\"daysLeft\":${r[6]}}")
+            }
+
+            // P3.2：借工作台这次扫描顺带发合同到期通知。
+            // 只在管理侧刷新时写库——员工刷新工作台不应该产生任何 INSERT。
+            // ref 去重键是 `员工ID:到期日`，所以续签后到期日变了会重新提醒，
+            // 同一天反复刷新则全部被 UNIQUE(user_id, type, ref_id) 挡住。
+            if (u.role == "ADMIN" || u.role == "HR") {
+                notifyContractExpiringBatch(notifUserIds(queryRows(notifManagerUserSql())), expRows)
             }
 
             let deptRows = queryRows("""

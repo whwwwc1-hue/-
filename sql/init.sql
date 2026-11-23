@@ -207,6 +207,25 @@ CREATE TABLE IF NOT EXISTS hr_approval_log (
     INDEX idx_al_request (request_id)
 ) ENGINE=InnoDB COMMENT='审批链历史表';
 
+-- 13. 站内通知表（P3.2 通知中心）
+-- 三类触发：合同 30 天内到期 / 审批结果（含长假转二级）/ 工资条发放。
+-- UNIQUE(user_id, type, ref_id) 是幂等的关键：重复发薪、工作台反复刷新都不会堆出第二条。
+--   ref_id 取值——PAYROLL_PAID=工资单ID；LEAVE_*=申请单ID；
+--   CONTRACT_EXPIRING=`员工ID:到期日`（续签后到期日变化即可重新提醒）。
+-- user_id 与 sys_user.id 同为 BIGINT；read_flag 用 TINYINT(1) 与全库布尔列风格一致。
+CREATE TABLE IF NOT EXISTS sys_notification (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL COMMENT '接收人(sys_user.id)',
+    type VARCHAR(30) NOT NULL COMMENT 'CONTRACT_EXPIRING/LEAVE_APPROVED/LEAVE_REJECTED/LEAVE_NEXT_LEVEL/PAYROLL_PAID',
+    title VARCHAR(120) NOT NULL COMMENT '标题（代码拼装，不含用户输入）',
+    content VARCHAR(500) DEFAULT NULL COMMENT '正文（代码拼装，不含用户输入）',
+    ref_id VARCHAR(64) NOT NULL DEFAULT '' COMMENT '业务跳转键，见上方注释',
+    read_flag TINYINT(1) NOT NULL DEFAULT 0 COMMENT '0=未读，1=已读',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_notif_user_type_ref (user_id, type, ref_id),
+    INDEX idx_notif_user_read (user_id, read_flag)
+) ENGINE=InnoDB COMMENT='站内通知表';
+
 -- ==========================================
 -- 初始演示数据（Seed Data）
 -- ==========================================

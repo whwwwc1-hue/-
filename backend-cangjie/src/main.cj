@@ -177,6 +177,17 @@ func dispatchRequest(ctx: HttpContext): Unit {
             if (id > 0 && segs[4] == "approve") { handleRequestApprove(ctx, id); return }
         }
 
+        // Notification (P3.2 站内通知中心) routes
+        // 注意顺序：unread-count / read-all 是固定路径，必须排在 :id 形式的分支之前，
+        // 否则 "unread-count" 会被 parseIntId 解析成 0 而落到 404。
+        if (path == "/api/v1/notifications/unread-count" && method == "GET") { handleNotificationUnread(ctx); return }
+        if (path == "/api/v1/notifications/read-all" && method == "POST") { handleNotificationReadAll(ctx); return }
+        if (path == "/api/v1/notifications" && method == "GET") { handleNotificationList(ctx); return }
+        if (segs.size == 5 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "notifications" && method == "PUT") {
+            let id = parseIntId(segs[3])
+            if (id > 0 && segs[4] == "read") { handleNotificationRead(ctx, id); return }
+        }
+
         // Performance routes
         if (path == "/api/v1/performances/init-cycle" && method == "POST") { handlePerformanceInitCycle(ctx); return }
         if (path == "/api/v1/performances" && method == "GET") { handlePerformanceList(ctx); return }

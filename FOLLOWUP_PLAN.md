@@ -297,10 +297,17 @@
   其中「恰好扣满」那例因 5 天 > 3 天**必须**改走两级，已按新语义补上 HR 二级步骤而不是放宽断言。
 
 - [ ] **P3.2 站内通知中心**：新增 `sys_notification` 表（`user_id, type, title, content, ref_id, read_flag, created_at`），在「合同 30 天内到期 / 审批结果 / 工资条发放」三处触发写入；`GET /api/v1/notifications`、`PUT /api/v1/notifications/:id/read`、`POST /api/v1/notifications/read-all`；[AppLayout.vue](./frontend-web/src/layout/AppLayout.vue) 顶栏铃铛红点 + 抽屉列表 + 30s 轮询。
+  > **本轮部分交付（仅后端）**：建表 + 表 13 已在真实库执行、`notification_controller.cj`（470 行 / 39 个顶层函数，全部 `public`）、
+  > `main.cj` 4 条路由、三处触发接线 ✅；**前端铃铛 / mock 分发 / E2E / 单测文件未做**，按用户要求先提交一部分。
+  >
+  > 触发点接线比原始描述多做了一处：长假转 `PENDING_HR` 时给在职 HR 发「待你复核」，
+  > 否则二级审批只能靠 HR 自己刷工作台才发现有单。剩余清单见第九节日志与 12.15。
 
 **验收**（逐项标注兑付状态）：
 - 「4 天长假必须两级签完才扣年假」✅ **已兑付**（P3.1，见上方取证）。
-- 「发薪后员工铃铛出现未读消息且点击跳转工资条」⬜ 属 P3.2，未开工。
+- 「发薪后员工铃铛出现未读消息且点击跳转工资条」🟡 **后端半条已兑付**：发薪写入 `PAYROLL_PAID` 通知的
+  SQL 与 `ref_id = 工资单ID` 已在真实库跑通（重复发薪不产生第二条，实测见第十一节）；
+  「铃铛出现未读 + 点击跳转」依赖前端，属**未交付**，登记为 L-NOTIF-3。
 
 ---
 
@@ -423,6 +430,10 @@
 | 2026-11-24 | ★ P3.1 服务端 403 只能绕开 UI 测 | 越级分支下前端已按 `myAction` 藏掉按钮，纯 UI 用例永远打不到 `approve` 的 403 分支，会造成「前端挡住了 = 后端也挡住了」的错觉 | ✅ 新增 `apiPost()`：在已登录页面内 `fetch` 直连接口（带 `Bearer` 头），断言 HTTP 码 + 信封 `message` + **副作用为零**（`approvalSteps`、`leaveBalance`、`status` 三项都不许动）。同时登记 **L-MOCK-2 类风险**：此路径 mock 与后端各写一遍，真实 403 仍待 `E2E_REAL=1` 复验（L-MOCK-1） |
 | 2026-11-24 | ★ P3.1 E2E 首跑 1 红（自写用例的坑） | 「长假可撤回 + 3 天单级」连建两张单，两条 toast 都含「申请已提交」（长假那条是 `申请已提交，超过 3 天的长假需…`），`toast()` 是 `filter({hasText})` ⇒ **strict mode 命中 2 个** | ✅ 建单助手改用 `.last()`。上一轮已犯过同类错（P2.3 的「关闭」按钮），规律是：**Element Plus 的 toast 会叠加存活 3 秒，任何连续两次相同前缀的提示都必须显式取最后一条**；同时刻意不做「等 toast 消失」的 sleep，避免把时序耦合进用例 |
 | 2026-11-24 | ★ **L-APR-2 的证据补强**（写文档时反向查出的自身错误归因） | 为写第十节风险条目，把基线 `6e79923` 的全部顶层函数逐个扫了跨文件引用 | 基线 **20 个非 `public` 顶层 `func`**（`calculateTax` / `buildUserProfileJson` / `maskIdCard` / `unescapeField` / `dispatchRequest` 等）**跨文件引用 0 处**；另 90 个 `public func` 承担全部跨文件调用 | 「包内私有可跨文件」这条假设**既无官方条文、也无基线实例**，只是「未被证伪」⇒ L-APR-2 措辞已升级。同时**推翻我自己的一处取证**：`mysql_pool.cj` 那 10 余个 `let B_*: UInt8 = 0xNN` 是 **P0.1 我自己加的**（`git show 6e79923:...` 匹配 **0 处**），不能当「基线已证实」用，第十一节已改为如实标注。真正有基线先例的是**数组字面量**（全仓仅 `mysql_pool.cj` 的 `args` **1 处**）与**行尾 `+` 续接拼接（193 处）** |
+| 2026-11-24 | **P3.2 后端（部分交付）** | 新建 `notification_controller.cj`：SQL 文本生成、`ref_id` 去重键、`IN (...)` 拼串、行→JSON **全部抽成不碰库的纯函数**并显式 `public`（吸取 L-APR-2 教训，不给跨文件私有可见性留依赖）；`main.cj` 注册 4 条路由；三处业务触发接线；`sql/init.sql` 加**表 13 `sys_notification`** | ✅ 表 13 已在真实 `hrms_db` 执行，`SHOW CREATE TABLE` 核对字符集/唯一键/索引齐全；生成的 SQL 文本按后端同款命令行（`--batch -N -e "SOURCE f"`）实测可执行。⬜ **前端铃铛 / mock 分发 / E2E / 单测文件未做**（用户要求先提交一部分），剩余清单见 12.15 末尾 |
+| 2026-11-24 | ★ **P3.2 推翻自己写的注释** | 我为「批量发薪拼多条 INSERT」写的注释称*逐条写能让撞 UNIQUE 只影响自己那条、不把整批带崩*。写完后反查 `runMysqlFile` 命令行发现**没有 `--force`**，于是构造三语句脚本（成功 / 撞 `uk_notif_user_type_ref` / 成功）在真实库实测 | `ERROR 1062 ... at line 19 in file: ...notif_live.sql`，**第 19 行之后所有语句一条都没执行**（该脚本后面的 5 个探测段全部无输出），退出码 **1** ⇒ 我的断言是**错的**。改用 `INSERT IGNORE` 重测：B1/B2 两条都在、退出码 **0**。**修复**：`notifInsertSql` 改 `INSERT IGNORE INTO`，并在文件头与 `notifJoinInserts` 注释里如实记录「IGNORE 负责不中止、逐条负责少伤，两者作用不同」 |
+| 2026-11-24 | ★ 无 SDK 下的检查手段已接近用尽 | 补了两个临时脚本（不入仓，见 12.15）：`.cj` 括号/三引号配平 + 全项目跨文件调用符号解析 | `notification_controller.cj` **零未解析调用**；dashboard/payroll/request 对通知符号的跨文件调用**全部命中且全部 `public`**。剩余告警全是既存类别（`ReentrantMutex`/`SHA256` 等 stdlib 类型、`AuthUser`/`DeptRow` 等 `class/struct` 名、测试框架 `Assert`、`init`/`main` 入口），系脚本只采集顶层 `let/var/func` 所致，**非新增缺陷** |
+| 2026-11-24 | **用户指令变更（交付节奏）** | 原话：「不要全做完全提交，先提交一部分，其他的过几天我通知你提交」。此前我按「一口气执行到底、全部完成后再提交」推进 | 本轮改为**只提交 P3.2 后端 + 建表 + 文档回填**，提交后**暂停等通知**；剩余 5 项已按依赖顺序写进 12.15 第⑤项，下次接上不需要重新考古。分支纪律不变（仍只推 `zc`，不新建分支） |
 
 
 ---
@@ -470,6 +481,9 @@
 | **L-APR-1** | `sql/init.sql` 的改动**不会自动作用到已存在的库**：新建表 12 `hr_approval_log` 只在 `init.sql` 里，而存量 `hrms_db` 早已建过库；`hr_leave_overtime.status` 的注释扩写同理需要 `ALTER TABLE ... MODIFY` | 后来者在旧库上直接起服务，审批链写入会 `Table 'hrms_db.hr_approval_log' doesn't exist`，二级流转全部 500 | 本机已用 `mysql.exe` 对该库**实跑过** DDL + `ALTER` 并验证命中（见第九节）。但这是「我这台机器好了」，不是「部署脚本好了」——根治需要一份幂等迁移脚本，属独立工作项，未排期。`init.sql` 的建库路径本身是完整的 |
 | **L-APR-2** | 仓颉「顶层 `func` 不加修饰符 = 包内私有，且同包其它文件可见」**至今没有官方条文证实**（WebFetch 可见性章节两次返回空正文、WebSearch 只给到不含默认值的修饰符表）；更糟的是基线也**给不出反证支持**：本轮扫完基线 **20 个非 `public` 顶层 `func`**，跨文件引用 **0 处** | 若默认语义是「仅本文件可见」，则 `request_controller_test.cj` 与既有 **4 个测试文件**（`payroll`/`performance`/`rate_limit`/`response`）会在 `cjpm test` 首跑时**集体报未定义**——275 个 `@TestCase` 里有 242 个建立在这条假设上 | 本轮已止损：P3.1 新增的 15 个可测函数**一律显式 `public`**，不依赖该假设。旧文件不做无证据的批量改动（改动本身也可能引入新问题），SDK 就位后首跑即以此判别真伪 |
 | **L-APR-3** | 审批状态机、审批链写入、以及 `UNIQUE(request_id, step)` 冲突 → `executeSql` 返回 false → 500 这条并发保护分支，**全部未经编译与真实运行** | E2E 的 10 例绿只证明「前端 + TS 镜像的状态机」自洽，不能证明仓颉那份实现对 `Float64` 比较、`IN (...)` 拼串、事务顺序的处理正确 | 与 L-CJ-1/L-MOCK-1 同性质。已做的兜底：①15 个纯函数写了 33 个 `@TestCase`，期望值用 node 按同算法独立复算过；②状态机在 TS 里**逐函数重写一遍**作为交叉实现（两份同源不同人写的实现能对齐，说明至少不是笔误）；③`step` 取值刻意放在改写 `row.status` **之前**，这类顺序坑已在代码注释里标明。根治仍是 `cjpm build && cjpm test` + `E2E_REAL=1` |
+| L-NOTIF-1 | **P3.2**：存量库不会自动获得 `sys_notification` | `sql/init.sql` 用的是 `CREATE TABLE IF NOT EXISTS`，**只在全新初始化时生效**；已建好的库里没有这张表，`notification_controller` 的每条 SQL 都会以 `ERROR 1146 (42S02) Table 'hrms_db.sys_notification' doesn't exist` 失败，而 `executeSql` 返回 `Bool` 且**调用侧不检查** ⇒ 通知静默丢失，接口返回空列表，前端看不出异常 | 本轮已在开发库 `hrms_db` 手工执行 DDL（`SHOW CREATE TABLE` 已核对），但**仓库内没有迁移脚本**。部署到任何其它库都必须二选一：重跑 `init.sql`，或单独执行第十一节记录的建表语句。根治 = 补一份带版本号的迁移 SQL（与 L-APR-1 同一项欠债，建议合并处理） |
+| L-NOTIF-2 | 合同到期提醒的**触发时机是设计缺陷级取舍** | 触发点挂在 `handleDashboardOverview`（因为只有它已经查出 30 天内到期的行集），意味着**只有 ADMIN/HR 打开工作台时才会生成提醒**；若 HR 整个月不登录，到期提醒一条都不会产生——这恰好是最需要提醒的场景 | 已在注释里写明该取舍。根治需定时任务（仓颉侧无现成调度），或改为「登录时扫描一次」并放宽为只读扫描 + 首次命中写库。验收时不得把「工作台能看到到期列表」当成「通知已按时生成」 |
+| L-NOTIF-3 | P3.2 验收项**尚未兑付**：`sys_user` 当前为空表 | `SELECT COUNT(*) FROM sys_user` → **0**（同库 `hr_employee` → 5）⇒ 本轮只能验证 SQL 语法与空结果不报错，**员工→账号映射的命中路径完全未验证**（`notifResolveUser` 返回 0 时 `pushNotification` 直接丢弃通知，属正确行为但没人实测过）；「发薪后员工铃铛出现未读且点击跳转工资条」依赖前端铃铛，本轮未交付 | 建测试账号后复跑第十一节记录的 SQL 探测脚本（`notifUserMapSql` 段），并在 P3.2 前端交付时补 E2E 验收项。在此之前，第五节验收清单该项保持 🟡 不得改 ✅ |
 
 ---
 
@@ -546,6 +560,61 @@
   也就是说：这条假设**既无官方条文、也无基线实例**，只是「未被证伪」。
   **本轮处置**：P3.1 新增的 15 个可测函数**一律显式 `public`**，把这条不确定性从新增代码里彻底摘除；
   既有 4 个测试文件对该假设的依赖登记为 **L-APR-2**，留给 `cjpm test` 首跑判别。
+
+**P3.2 新增的取证结论（本轮在真实 `hrms_db` 上实测；这类结论 `git grep` 复跑不出来，故命令一并记录）**：
+
+- ⚠️ **`mysql.exe` 跑脚本是「首错即中止」**（推翻我自己写的注释，已修）。`runMysqlFile` 的完整参数是
+  `--defaults-extra-file / -D / --connect-timeout / --batch / -N / -e "SOURCE <file>"`
+  （[mysql_pool.cj](./backend-cangjie/src/db/mysql_pool.cj#L184-L191)），**没有 `--force`**。
+  复跑命令（三语句：成功 / 撞 `uk_notif_user_type_ref` / 成功）：
+
+  ```powershell
+  & "D:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" --default-character-set=utf8mb4 `
+    -uroot -p123456 -D hrms_db --batch -N -e "SOURCE C:/Users/<user>/AppData/Local/Temp/x.sql"
+  ```
+
+  实测输出 `ERROR 1062 (23000) at line 19 in file: '...x.sql': Duplicate entry ...`，
+  **该行之后的 5 个探测段全部无输出**、退出码 **1**；把 `INSERT INTO` 换成 `INSERT IGNORE INTO` 重跑，
+  三条里应存的两条都在、退出码 **0**。⇒ 全仓推论：**任何「一个脚本拼多条语句」的写法都不得假设后续语句会继续跑**
+  （`init.sql` 的种子段同理：中间一条失败，后面的种子全部不会执行）。
+- **`sqlEscape` 往返保真**（实测 `HEX()`，非推断）：输入 `李'明\华"测试"` + 真实 CRLF + `换行`，
+  落库 `HEX(title) = E69D8E 27 E6988E 5C E58D8E 22 E6B58B E8AF95 22 0D0A E68DA2 E8A18C`、`CHAR_LENGTH = 13`
+  —— 单引号/反斜杠/双引号都以**单字节原样**存储，换行保留为真实 `0D0A`。
+  读回时 `--batch` 会把 `\` 显示成 `\\`、换行显示成 `\n`，**这是客户端显示转义、不是数据被改**
+  （正是 `mysql_pool.cj` 里字段反转义那一步存在的理由）。
+  输出侧 `jsonEscape` 已覆盖 `\ " \r \n \t`（[response.cj](./backend-cangjie/src/common/response.cj#L8-L15)）
+  ⇒ 即便通知标题里真带换行（员工名来自 CSV 导入时可能），拼出的 JSON 也不会炸。
+- **表 13 的 DDL 与已在库上核对的形态**（L-NOTIF-1 要求的「第十一节记录的建表语句」即此，可直接粘贴执行）：
+
+  ```sql
+  CREATE TABLE IF NOT EXISTS sys_notification (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id BIGINT NOT NULL COMMENT '接收人(sys_user.id)',
+      type VARCHAR(30) NOT NULL,
+      title VARCHAR(120) NOT NULL,
+      content VARCHAR(500) DEFAULT NULL,
+      ref_id VARCHAR(64) NOT NULL DEFAULT '',
+      read_flag TINYINT(1) NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_notif_user_type_ref (user_id, type, ref_id),
+      INDEX idx_notif_user_read (user_id, read_flag)
+  ) ENGINE=InnoDB COMMENT='站内通知表';
+  ```
+
+  `SHOW CREATE TABLE` 实测回显：库默认 `utf8mb4_0900_ai_ci` 被显式覆盖为 **`utf8mb4_unicode_ci`**（与全库一致，
+  也让 `ref_id` 的唯一键大小写不敏感）；两个索引均存在。`user_id` 用 `BIGINT` 对齐 `sys_user.id`（**不是** `INT`）。
+- **`sys_user` 是空表**（`COUNT(*)` → 0，同库 `hr_employee` → 5）⇒ `notifUserMapSql` / `notifResolveUser` 的
+  **命中路径本轮无法实测**，只证明了语法正确、空结果不报错。这是 L-NOTIF-3 的由来。
+- **无 SDK 时新增的两项检查（脚本为临时件，不入仓，逻辑如上所述）**：
+  ① `.cj` 括号 / 三引号配平（剥离 `//`、`/* */`、`"..."`、`"""..."""`、`'...'` 后再配对，并保留换行以定位行号）；
+  ② 全项目跨文件调用符号解析（收集全部顶层 `public func / func / let / var` 定义 + 一份已知外部符号白名单，
+  再逐文件检查被调用的标识符是否命中）。扫描面：**42 个 `.cj` 文件、476 个顶层定义**。
+  结果：`notification_controller.cj`（470 行）**零未解析调用**，
+  dashboard / payroll / request 对通知符号的跨文件调用全部命中且**全部 `public`**。
+  该文件顶层共 **39 个 `func`，全部显式 `public`、0 个非 public**，且**没有任何顶层 `let` 常量**
+  （类型白名单与文案映射都写成 `if/else` 链，见 `notifIsValidType` / `notifTypeLabel`）
+  ⇒ **P3.2 新增代码对 L-APR-2 那条未证实假设的依赖为 0**，比 P3.1 更进一步。
+  ⚠️ 这两项只能证明「名字与结构自洽」，**证明不了类型检查**（如 `Int64` 与 `Float64` 混用、`Option` 解包），L-CJ-1 不变。
 
 **单元测试框架（1.0.5 官方逐字，本轮新证实）**：
 - **无需任何 import**（官方：「单元测试框架 API 已在 `std` 的 `unittest` 包、宏在 `std.unittest.testmacro` 包，不需要在测试文件中显式导入」）；若要显式写则两行成对：`import std.unittest.*` + `import std.unittest.testmacro.*`。
@@ -1032,7 +1101,65 @@ P3.1 状态机的 ground truth（仓颉与 TS 两份实现**必须逐格相同**
 npx playwright test e2e/approval.spec.ts --grep "长假" --workers=1
 ```
 
+### 12.15 P3.2 站内通知中心（后端部分交付）的测量值
 
+> 本轮按用户要求**只交付并提交后端**，因此本节一半是「实测值」，一半是「欠债清单」——
+> 后者写在这里是为了下次接着做时不用重新考古。所有数字取自命令实跑输出（11.2 纪律）。
+
+**① 本次提交的逐文件 `numstat`（对比 `HEAD`，即 `7174898`）**：
+
+| 文件 | +/- | 说明 |
+| --- | --- | --- |
+| `backend-cangjie/src/controller/notification_controller.cj` | **470 / 0**（新增） | 39 个顶层 `func`，全部 `public`；无顶层 `let` |
+| `backend-cangjie/src/main.cj` | 11 / 0 | 4 条路由（固定路径在 `:id` 之前） |
+| `backend-cangjie/src/controller/request_controller.cj` | 10 / 0 | 终态通知 + `PENDING_HR` 逐个提醒在职 HR |
+| `backend-cangjie/src/controller/dashboard_controller.cj` | 9 / 1 | `case Some(_) =>` → `case Some(u) =>` + 到期批量提醒（角色门控） |
+| `backend-cangjie/src/controller/payroll_controller.cj` | 8 / 1 | 单条发薪 SELECT 追加 `p.employee_id`；批量发薪改**先取行后更新** |
+| `sql/init.sql` | 19 / 0 | 表 13 `sys_notification` |
+| `FOLLOWUP_PLAN.md` | 本文档增量 | 不计入代码分子（13.5 口径 1） |
+
+代码口径累计（排除本文档、对比基线 `6e79923`，含暂存区）：**53 files / 13599 insertions(+), 142 deletions(-)**，
+即 13599 / 27803 ≈ **48.9%**（P3.1 提交后为 13073 ≈ 47%）。
+
+**② 表 13 在真实库落地后的 `SHOW CREATE TABLE` 关键回显**（不是 `init.sql` 的文本，是库里的实际形态）：
+
+| 项 | 实测值 |
+| --- | --- |
+| collation | `utf8mb4_unicode_ci`（库默认是 `utf8mb4_0900_ai_ci`，被表选项覆盖） |
+| 唯一键 | `UNIQUE KEY uk_notif_user_type_ref (user_id, type, ref_id)` |
+| 索引 | `INDEX idx_notif_user_read (user_id, read_flag)` |
+| `user_id` | `bigint`（对齐 `sys_user.id`） |
+| `created_at` | `datetime NOT NULL DEFAULT CURRENT_TIMESTAMP` |
+| `AUTO_INCREMENT` | 建表后为 **1**，本轮全部探测做完（已清理）为 **7**。逐条对得上：A 段 1 次 + 批量段 2 次（第 3 条因脚本中止**根本没执行**，不占号）+ IGNORE 段 3 次 = **6 次分配** ⇒ 下一个 id 是 7 |
+| 清理确认 | `SELECT COUNT(*) FROM sys_notification` → **0**（探测行用 `user_id IN (990001,990002)` + `ref_id LIKE 'ZZP32:%'` 隔离，未碰任何业务数据；`hr_employee` 仍为 5 行） |
+
+> ⚠️ 顺带记一条容易被误读的现象：**撞唯一键的 INSERT 也会吃掉一个自增 id**（MySQL 先分配再判重），
+> 所以这张表的 `id` 天然有洞、`COUNT(*)` 与 `AUTO_INCREMENT` 对不上是**正常**的，
+> 别拿它当「数据丢了」的证据；真要核对用 `ref_id`，不要用 `id` 连续。
+
+**③ 本轮拿到的 4 组实测结论**（详细论证在第十一节「P3.2 新增的取证结论」，此处只留可核对的数字）：
+
+| 探测 | 结果 |
+| --- | --- |
+| 三语句脚本（成功/撞 UNIQUE/成功），`mysql.exe` 无 `--force` | `ERROR 1062 at line 19` ⇒ **其后全部语句未执行**，exit **1** |
+| 同上改 `INSERT IGNORE` | B1、B2 **都在**，exit **0** ⇒ `notifInsertSql` 已据此改写 |
+| 转义往返（`'`、`\`、`"`、真实 CRLF） | `CHAR_LENGTH = 13` 与输入等长；`HEX` 显示 `27 / 5C / 22 / 0D0A` 均为单字节原样 |
+| 纯函数镜像自检（9 项：注入串、限额、空 `IN` 列表、非法 type…） | **9 / 9 通过**，含 `notifStrList([]) == "''"`（回落值错误会让整条 SQL 语法失败） |
+
+**④ 前端三连（本轮零前端改动，跑它是为了证明「没被我带崩」而非「我做了前端」）**：
+`vue-tsc --noEmit` exit **0** / `eslint --max-warnings 0` exit **0** / `npm run build` exit **0**（`✓ built in 7.92s`，
+唯一告警是既存的 chunk > 500 kB 提示）。`npx playwright test --list` 仍为 **68 tests in 8 files**，未增删用例。
+
+**⑤ 欠债清单（下次接到「继续」时的确定起点，按依赖顺序）**：
+1. `notification_controller_test.cj`：39 个纯函数里**可脱离数据库的全测**，期望值用 node 镜像独立复算（同上 9 项自检的扩展）。
+2. `src/api/hrms.ts` 4 个接口 + `NotificationItem`；`AppLayout.vue` 顶栏 `el-badge` 铃铛 + 抽屉列表 +
+   `onMounted` 30s `setInterval` / `onUnmounted` 清理 + 按 `type` 跳转（`PAYROLL_PAID`→`/payroll/my`、
+   `LEAVE_*`→`/approval`、`CONTRACT_EXPIRING`→`/employees`）。
+3. `mock-server.ts` 4 条分发：**分发数 28 → 32**，需同步第三节口径与 12.x 各表的「mock 分发数」；
+   `read-all`/`unread-count` 两个固定路径同样要排在 `:id` 之前（镜像后端的路由顺序坑）。
+4. `e2e/notification.spec.ts`：验收项「发薪后铃铛出现未读且点击跳工资条」+ 越权改他人通知（应 404 不是 200）+
+   `read-all` 后红点归零 + **重复发薪不产生第二条**（这条直接测的就是本轮的 UNIQUE 语义）。
+5. 建 `sys_user` 测试账号，把 L-NOTIF-3 的命中路径补上。
 
 ---
 
@@ -1099,22 +1226,27 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 | 我：`936e0e4` P2.2 前端导入 + E2E | **5 files / 972 insertions(+), 5 deletions(-)** |
 | 我：`86f7b8f` P2.3 工资条打印 | **4 files / 715 insertions(+), 13 deletions(-)**（代码 **603** 行，其余为本文档增量，逐项见 12.12） |
 | 我：`8195ff2` P2.4 考勤月度汇总 | **9 files / 1441 insertions(+), 17 deletions(-)**（逐项见 12.13，仓颉侧含 539 行新单测） |
-| 我：P3.1 长假二级审批（**写入本行时尚在工作区**） | 工作区实测 **51 files / 12668(+), 141(-)**（对比 `8195ff2` 后的 47/11899/100，净增 **4 files / 769 行**）+ 未跟踪 `request_controller_test.cj` **405 行** |
-| **代码累计（含工作区 P3.1，排除本文档）** | **52 files / 13073 insertions(+), 141 deletions(-)** |
+| 我：`7174898` P3.1 长假二级审批（**已提交**） | **8 files / 1364 insertions(+), 64 deletions(-)**；排除本文档（173/6）= **7 files / 1191(+), 58(−)**，逐项见 12.14 |
+| 我：P3.2 站内通知中心（后端部分交付，**在工作区**） | 本次 **6 files / 527(+), 3(−)**（`notification_controller.cj` 470/0 新增、`main.cj` 11/0、`request_controller.cj` 10/0、`dashboard_controller.cj` 9/1、`payroll_controller.cj` 8/1、`init.sql` 19/0），逐项见 12.15；⚠️ **只交付后端**，前端/mock/E2E/单测按用户要求留到下一次 |
+| **代码累计（含工作区 P3.2，排除本文档）** | **53 files / 13599 insertions(+), 142 deletions(-)** |
 | 含文档累计（`86f7b8f` 提交后实测） | 45 files / 11220 insertions(+), 147 deletions(-) |
 
 三条口径说明：
 1. **代码累计**的复跑命令：`git diff --shortstat 6e79923 HEAD -- . ":(exclude)FOLLOWUP_PLAN.md"`。
    选它做分子是因为它**不受我写多少文档影响** —— 否则「工作量」会随着我补注释、补风险条目无限自增，这个数就没意义了。
-   ⚠️ 本行 P3.1 用的是**去掉 `HEAD` 的工作区版本**（`git diff --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"`），
-   因为 P3.1 提交尚未落地；该命令**统计不到未跟踪文件**，所以 405 行的新单测要手工相加（上表末行已相加）。
+   ⚠️ 本行 P3.2 用的是**带暂存区的工作区版本**（`git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"`），
+   因为 P3.2 提交尚未落地；P3.1 已于 `7174898` 落地，故改用权威 `git show --numstat`，
+   不再需要「手工相加未跟踪文件」（上一版为此写了 405 行相加的说明，现已无用）。
 2. 「含文档累计」这一行注定过期：把命令里的 exclude 去掉即可复测（`git diff --shortstat 6e79923 HEAD`），
    但每写一次本行它就自增，所以它**只作趋势参考、不进对账口径**。此处实测值来自 P2.3 提交前的 `git add -A` 暂存区。
 3. 旧版本本节写过「8 files」「38 files / 8082 insertions」「约 29%」，三个数**都是当时口算的**，
    现已全部替换为 `git show --shortstat` 输出（P0 实为 11 files，不是 8）。这正是 11.2 立纪律的直接动因。
 
-⚠️ 诚实结论：按代码插入量 **13073 / 27803 ≈ 47%**（P3.1 工作区实测，上一版 43%），**仍未达到用户要求的「至少匹配现有需求量」**。
-剩余 P3.2 / P4.1 / P4.2 是主要来源，其中 P4 两个新模块要同时落
+⚠️ 诚实结论：按代码插入量 **13599 / 27803 ≈ 48.9%**（P3.2 后端部分交付，上一版 47%），
+**刚越过用户要求的「至少匹配现有需求量」这条线，但越得很薄**——
+且这是把 P3.2 **只做了一半**就算进去的数，所以真正的完成率要看条数而非行数：
+**需求 23 条里已完整交付 15 条、P3.2 交付半条、余 7.5 条未开工**。
+剩余 P3.2 前端 / P4.1 / P4.2 是主要来源，其中 P4 两个新模块要同时落
 「建表 + 后端 controller + 仓颉单测 + 前端视图 + 路由注册 + mock + E2E」，是唯一有希望把比值推向 60%+ 的工作包；
 P5 的 5 份交付文档**不计入**上面的分子（口径 1）。行数仍不是目标，可验证的功能与测试才是 ——
 但用户这句话本身是可量化的，所以我不拿「质量优先」当借口回避它。

@@ -459,6 +459,16 @@ LIMIT 1
                         return
                     }
                     writeAuditLog(u, "假勤审批", "审批${category}", "审批单 ID=${reqId} (${empName}, ${subType}, 时长=${formatNum2(duration)}) 第${stepLevel}级 ${action} -> ${nextStatus}")
+                    // P3.2 通知：终态只通知申请人；推进到二级时额外通知 HR 去复核。
+                    // 放在 sendOk 之前、事务成功之后——写通知失败不该回滚已经生效的审批，
+                    // pushNotification 内部也不会抛，最多是铃铛少一条，可接受。
+                    notifyRequestResult(reqId, empId, nextStatus, category, duration)
+                    if (nextStatus == "PENDING_HR") {
+                        let hrIds = notifUserIds(queryRows(notifHrUserSql()))
+                        for (hid in hrIds) {
+                            notifyNextLevel(reqId, empName, hid)
+                        }
+                    }
                     sendOk(ctx, "{\"id\":${reqId},\"status\":${jsonStr(nextStatus)},\"action\":${jsonStr(action)},\"currentLevel\":${stepLevel},\"nextLevel\":${reqCurrentLevel(nextStatus)}}")
             }
     }
