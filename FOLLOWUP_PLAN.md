@@ -813,7 +813,7 @@ P1.3 收口时把 mock 覆盖量写成「**29 个接口**」，沿用数轮到 P
 
 | 方案 | 操作 | 风险 | 备注 |
 | --- | --- | --- | --- |
-| A 推分支 + PR | 把 `main` 推到新分支（如 `trae/p1`），在 GitHub 开 PR 指向 `main` | 低 | 不动主干；PR 的 diff 即 41 文件那份；`on: push` 不会在非主干触发，需靠 `pull_request` 触发 CI |
+| **A 推分支 + PR ✅ 已执行（2026-11-23，见 13.6）** | 把 `main` 推到新分支（实际分支名 `trae/hrms-work`），在 GitHub 开 PR 指向 `main` | 低 | 不动主干；PR 的 diff 即 41 文件那份；`on: push` 不会在非主干触发，需靠 `pull_request` 触发 CI |
 | B `-s ours` 合并后推主干 | 见 13.2 | 中（删 `.env`；主干对协作者前移） | 唯一能「非 force 推 main」的路径 |
 | C 只推 `zc` 分支 | 覆盖远端 `zc`（其 tip=`1bdde7e`，是本地历史里**没有**的提交，需先确认那是用户自己的旧分支） | 中 | 会丢掉远端 `zc` 独有的对象，需 `--force` ⇒ 未经用户同意不做 |
 
@@ -855,3 +855,46 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 「后端 controller + 仓颉单测 + 前端视图 + mock + E2E」，是唯一有希望把比值推向 60%+ 的工作包；
 P5 的 5 份交付文档**不计入**上面的分子（口径 1）。行数仍不是目标，可验证的功能与测试才是 ——
 但用户这句话本身是可量化的，所以我不拿「质量优先」当借口回避它。
+
+### 13.6 首次推送执行记录（2026-11-23，方案 A）
+
+用户指示「把目前做的工作先上传到 github 仓库中」。按 13.3 选择**风险最低的 A 方案**：
+推新分支、不动主干、不 force。
+
+```
+git -c http.proxy=http://127.0.0.1:7890 push -u origin "HEAD:refs/heads/trae/hrms-work"
+ => * [new branch]  HEAD -> trae/hrms-work
+```
+
+**远端 ref 实测**（`git ls-remote --heads origin`，推送后）：
+
+| ref | tip | 说明 |
+| --- | --- | --- |
+| `refs/heads/main` | `c76f07f` | **未变**（仍是 PR #1 的合并提交） |
+| `refs/heads/zc` | `1bdde7e` | 未变 |
+| `refs/heads/zys` | `c76f07f` | 未变 |
+| `refs/heads/trae/hrms-work` | `25794ff` | 新增，等于本地 `git rev-parse HEAD` |
+
+⇒ 13.2 担心的副作用**没有发生**：`origin/main` 的 `backend-cangjie/.env` 仍在，协作者环境不受影响。
+⇒ 本地 `main` 的 upstream 因带 `-u` 变成 `origin/trae/hrms-work`（副作用记录在案，后续推送默认落这个分支）。
+
+**必须先解决的网络事实（非猜测，本轮实测）**：`git.exe` 直连 github.com 失败，两条不同报错都出现过
+（`Recv failure: Connection was reset` / `Failed to connect to github.com port 443`），
+且对**公开仓库** `https://github.com/git/git.git` 同样失败 ⇒ 与凭据无关。
+`Test-NetConnection github.com -Port 443` 的 `TcpTestSucceeded=False`，
+但 `Invoke-WebRequest https://github.com/...` 返回 200 —— 差异的原因是 **PowerShell 会读系统 IE 代理，git 不会**：
+`HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings` 里 `ProxyEnable=1`、`ProxyServer=127.0.0.1:7890`。
+对策已持久化到**本仓库 local config**（不动全局配置）：
+
+```
+git config --local http.proxy  http://127.0.0.1:7890
+git config --local https.proxy http://127.0.0.1:7890
+```
+
+复测命令：`git ls-remote --heads origin`；若代理端口变化导致失败，改这两行即可。
+
+**L-CI-1 仍为开放**：`GET https://api.github.com/repos/whwwwc1-hue/-/actions/runs?per_page=5` 实测 `total_count=0`。
+成因不是失败而是**没触发** —— [ci.yml](./.github/workflows/ci.yml) 的 `push.branches` 只列 `main`/`master`，
+分支推送不满足；`pull_request` 无分支过滤，因此**开 PR 就会首跑**。
+入口：`https://github.com/whwwwc1-hue/-/pull/new/trae/hrms-work`（本会话无 `gh` CLI、也不擅自取用凭据管理器里的 token 代发 PR）。
+闭合条件：Actions 出现该 PR（或 main）的首个 run，且 `frontend`/`e2e` 两个 job 为 success；`backend` job 允许 skipped（T0.1 仍阻塞）。
