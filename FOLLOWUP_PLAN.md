@@ -113,7 +113,8 @@
 - [x] **P1.2 接口级集成测试脚本**：`scripts/api-smoke.ps1` 覆盖 4 角色登录、越权 `403`、打卡、审批扣年假、生成工资、工资条金额核对，作为无 CI 时的手工回归。✅ **已完成并经桩验证**：8 个章节 / **112 个断言点**，对「正确后端」桩跑出 `112 通过 / 0 失败 / 0 跳过`（exit 0）；对 5 类人为注入的错误**全部变红**（exit 1）；服务未启动时 exit 2 并给出可操作提示。详见第九节与 `scripts/api-smoke.ps1` 文件头说明。
 - [x] **P1.3 前端 Playwright E2E**：4 角色登录与侧边栏菜单隔离、审批弹窗提交、薪资生成后「我的工资条」金额一致。
       ✅ **已完成并经真实浏览器验证**：5 个 spec（auth 10 / rbac-menu 9 / attendance 8 / payroll 8 / approval 7）= **42 用例**，`--workers=1` 下 **42 passed (1.1m)**；`typecheck` / `eslint --max-warnings 0` / `build` 三连 exit 0。
-      拦截层是**有状态内存 mock**（29 个接口，逐字段回 `backend-cangjie/src` 源码取契约），fixture teardown 断言 `unmatched == []` —— 前端发起但 mock 未实现的请求会直接让用例失败，这是防「测试通过但契约已漂移」的闸门。
+      拦截层是**有状态内存 mock**（`route()` 分发表 **27 条**，P1.3 收口时 25 条，P2.2 补 `/employees` + `/employees/import` 两条；逐字段回 `backend-cangjie/src` 源码取契约），fixture teardown 断言 `unmatched == []` —— 前端发起但 mock 未实现的请求会直接让用例失败，这是防「测试通过但契约已漂移」的闸门。
+      ⚠️ **订正**：本节原写「29 个接口」是**未经测量的口算数**。实测口径应为 `mock-server.ts` 里 `if (method ===` 的分发条目数（`Measure-Object` = 27，P1.3 时为 25），且 `src/api/hrms.ts` 的 `*Api` 导出是 47 个，两个数都不等于 29。此后凡写入文档的计数必须附测量命令，见第十一节规则 6。
       金额一致性实证：emp01 生成后「我的工资条」实发 `￥15796.54`，调项后 `￥16620.26`，与核算中心列表逐分对齐（非硬编码，由 mock 按 `calculateTax` 同口径现算）。
       过程中修掉一个**真实前端缺陷**（L-FE-5 冷启动画像过期）并消除一个**既存假绿**（payroll 精确数组断言），详见第九、十节。
 - [x] **P1.4 GitHub Actions**：`.github/workflows/ci.yml`，前端 `npm ci && npm run typecheck && npm run build`；后端在 SDK 可用时 `cjpm build && cjpm test`（可先只跑前端 job，避免假绿）。
@@ -124,7 +125,7 @@
       ⚠️ 关键实证：CI 用 `E2E_CHANNEL=chromium` 而非本地默认的 `msedge`。这条**已在本机按 CI 等价条件跑过**（`CI=true` ⇒ `workers=2` + `reuseExistingServer:false` 自建 vite dev + Playwright 自带 chromium）：**42 passed (38.8s)**。
 
 **验收**：前端 CI 绿；单测覆盖全部金额与权限相关纯函数；越权与算薪金额有自动化断言。
-      ⚠️ 诚实修正原验收口径：「CI 绿」目前**只覆盖前端**（typecheck/lint/build/42 个 E2E）。后端 188 个 `@TestCase` 与 `api-smoke.ps1` 的 112 个断言点**仍无执行环境**（L-CJ-1），对应 job 呈 skipped 而非 passed。
+      ⚠️ 诚实修正原验收口径：「CI 绿」目前**只覆盖前端**（typecheck/lint/build/**51 个 E2E**，P2.2 前为 42）。后端 223 个 `@TestCase` 与 `api-smoke.ps1` 的 112 个断言点**仍无执行环境**（L-CJ-1），对应 job 呈 skipped 而非 passed。
 
 ---
 
@@ -141,7 +142,30 @@
 - 状态接受 `ACTIVE/在职`、`PROBATION/试用期`、`RESIGNED/离职`；性别接受 `1/2/0`、`男/女/M/F/MALE/FEMALE`（大小写不敏感）。
 - 整批 ≤ 500 行；任一行为空则**整批不写库**（`imported: 0`），错误行全量回显；`dryRun` 只校验不落库。
 - 写库：一条 SQL 文本内 `START TRANSACTION` + 多值 `INSERT hr_employee` + `INSERT ... SELECT` 建 `sys_user`（初始口令统一 `123456` 的哈希）+ `COMMIT`。
-- [ ] **P2.2 CSV 模板下载 + 前端解析**：[EmployeeView.vue](./frontend-web/src/views/employee/EmployeeView.vue) 增加「批量导入」对话框，浏览器端解析（含 GBK/UTF-8 BOM 处理），预览前 20 行与错误行高亮。
+- [x] **P2.2 CSV 模板下载 + 前端解析**：[EmployeeView.vue](./frontend-web/src/views/employee/EmployeeView.vue) 增加「批量导入」对话框，浏览器端解析（含 GBK/UTF-8 BOM 处理），预览前 20 行与错误行高亮。
+      ⚠️ 本条原文「浏览器端解析」已被 P2.1 的决策取代：**权威解析在后端**，前端解析**只服务预览与行号**，判定权不外放（见上方 P2.1 契约第 1 条与 L-IMP-5）。
+      ✅ **已完成并经真实浏览器验证**：9 个 E2E 用例（`employee-import.spec.ts`），全量 **51 passed**；`typecheck`/`eslint --max-warnings 0`/`build` 三连 exit 0；并按 CI 等价条件（`CI=true` + `E2E_CHANNEL=chromium` + 自建 dev server）复跑得 **51 passed (47.9s)**。落地要点见下方「P2.2 契约与取证」，新增风险见 L-IMP-5 ~ L-IMP-7。
+
+**P2.2 契约与取证（已落地，后续若改解析器必须同时改这三处）**
+- **改动面**：`src/api/hrms.ts`（+`EmployeeImportFailure`/`EmployeeImportResult` 类型与 `importEmployeesApi`，
+  单独 `timeout: 60000`，理由见 L-IMP-7）；`EmployeeView.vue`（**+325 行**，新增按钮/对话框/解析器/模板下载）；
+  `e2e/support/mock-server.ts`（**+311 行**：`GET /employees`、`POST /employees/import`、`Employee` 接口补 7 个可选字段以对齐
+  `employeeRowToJson` 的 20 出参）；新增 `e2e/employee-import.spec.ts`（222 行 / 9 用例）。
+  实测 `git diff --stat` = 3 files changed, **661 insertions(+)**，加上新增 spec 共 **883 行**（含空行与注释）。
+- **解析器三份同源**：后端 `parseCsvInto`（权威）/ 前端 `EmployeeView.vue` 的 `parseCsv` / mock 的 `parseCsv`，
+  三者必须产出同样的 `rows` 与**物理行号** `lines`。12.10 的 17 组输入是这三份的共同断言源。
+  行号语义（易错点）：引号内的换行**只推进物理行号、不拆记录**，所以「逻辑第 3 条记录」可以报在物理第 4 行 ——
+  这正是 `employee-import.spec.ts` 里 `CSV_QUOTES` 那条用例存在的唯一目的。
+- **编码策略**：先 `TextDecoder('utf-8', {fatal:true})`，抛错才回落 `TextDecoder('gbk')`，并把实际采用的编码显示给用户。
+  BOM 由前端剥除（`text.replace(/^\uFEFF/, '')`），后端 `csvStripBom` 也剥 —— **两侧都容错**，因为用户可能粘贴文本进对话框而不走文件。
+- **刻意没有的三处「贴心」**（都是踩过的坑，不是遗漏）：
+  ① 表头不完整时**只告警不禁用提交**，因为后端 `empImportCols` 允许部分列匹配并会逐行报「不能为空」，
+     前端若提前拦住就等于替后端改了语义（第一版确实这么写过，已回退）；
+  ② 预览只展示前 20 行（`IMPORT_PREVIEW_LIMIT`），不参与任何校验判断；
+  ③ mock 不模拟 `sys_user` 开通与审计写入，见 L-IMP-6。
+- **模板下载**：`'\uFEFF' + 表头 + CRLF + 示例行 + CRLF`，MIME `text/csv;charset=utf-8`。
+  **BOM 是给 Excel 的**（无 BOM 时 Excel 按本地代码页打开会乱码），而解析侧两侧都会剥掉它，用例
+  「带 BOM 的文件不误报表头问题」专门钉住这一点。
 - [ ] **P2.3 电子工资条打印/PDF**：[PayrollView.vue](./frontend-web/src/views/payroll/PayrollView.vue) 弹窗加 `@media print` 专版样式 + 「打印/导出 PDF」，字段含应发各项、五险一金、个税、实发。
 - [ ] **P2.4 考勤月度汇总导出**：`GET /api/v1/attendance/monthly-summary?month=&deptId=` 返回出勤率、迟到/早退/请假工时统计，前端一键导出 CSV。
 
@@ -249,6 +273,12 @@
 | 2026-11-23 | ★ P2.1 期望值复核 | 用 node **按同一算法复刻** `parseCsvInto/csvSplitRows/csvStripBom`，对 18 组输入逐条打印 `rows/counts/lines`，再回填断言 | ✅ 当场纠出 **5 处错断言**：`impParse("\r\n")` 实为 1 行（空行本身是记录）、`"a\r\n\r\nb\r\n"` 实为 3 行、`He said "hi"` 是 12 字符不是 11、缺列时报错数是 11 不是 12、`csvColIndex` 只 trim 表头不 trim 列名（`" 岗位 "` 应为 -1）。**教训：无法编译时，「我以为的语义」与「代码的语义」的偏差只能靠独立实现去撞，肉眼读第二遍几乎全绿** |
 | 2026-11-23 | P2.1 结构自检 | 写临时 node 脚本做 3 项静态体检：`.cj` 无 BOM 且 UTF-8 可往返、花括号配平（跳过字符串/注释）、测试文件里每个被调用的标识符都有定义处 | ✅ 35 用例 / 括号 depth=0 min=0 / 类体内 `let·var` 成员 0 处 / 未定义调用仅剩 std 方法（`fromUtf8·toArray·toRuneArray·toString`，均已取证） |
 | 2026-11-23 | P2.1 行为决策 | 解析器忠实 RFC4180 会把空行变成「1 个空字段的记录」，直接送去校验会刷出 6 条必填错误 | ✅ 新增 `csvRowIsBlank`，在 `doEmployeeImport` 里**先剔空行再算 `total` 与 500 上限**，且行号仍取自原始 `rowLines`（剔除后第 3 行照旧报 3）。语义与策略分离：解析器不改，策略在调用方 |
+| 2026-11-23 | **P2.2** | 前端导入链路落地：`hrms.ts` 补 `EmployeeImportResult`/`EmployeeImportFailure`/`importEmployeesApi`（**单独 `timeout: 60000`**，后端整批一条 SQL 交 `mysql.exe`，500 行远超全局 15s）；`EmployeeView.vue` 加「批量导入」对话框 + 与后端同语义的 `parseCsv`（引号 / `""` 转义 / 引号内换行只推进物理行号 / CRLF·CR·LF 三种换行 / 无尾换行末行也产记录）+ `decodeCsvFile`（`TextDecoder utf-8 fatal` 失败即回落 `gbk`）+ `downloadCsvTemplate`（`\uFEFF` 起头，Excel 打开不乱码） | ✅ 9 用例 / 全量 **51 passed**；`typecheck`·`lint --max-warnings 0`·`build` 全 exit 0 |
+| 2026-11-23 | ★ P2.2 抓到覆盖空洞 | 写「导入后回列表检索」用例时发现 **mock 从来没有 `GET /employees` 路由** —— 员工花名册自 P1.3 起就没被任何 E2E 覆盖，只因它一直没人测 | ✅ 补 `GET /employees`（20 出参逐字段对齐 `employeeRowToJson`、`keyword/deptId/status/page/pageSize` 五参与后端同口径、MANAGER 强制本部门且**忽略前端传来的 deptId**、`ORDER BY id DESC`、非法分页值回落 1/10）+ `POST /employees/import`。`unmatched == []` 这条闸门正是为此而设 |
+| 2026-11-23 | ★ P2.2 前端两处「过度贴心」回退 | 第一版把「提交」按钮写成 `:disabled="!importCsvText \|\| !importHeaderOk"`，并在 `submitImport` 里对表头不全直接早退 | ✅ 全部回退。后端 `empImportCols` 允许**部分列匹配**并对缺失列逐行报「不能为空」，前端提前拦住 = 擅自替后端收紧语义。现改为**只黄字告警不拦提交**，把判定权交回唯一权威 |
+| 2026-11-23 | ★ P2.2 计数口算错（本文档自己的） | 第四节长期写着「mock 覆盖 **29 个接口**」，本轮沿用该数写 L-MOCK-1 时顺手实测：`Select-String 'if \(method ===' \| Measure-Object` = **25**（P2.2 后 27），`hrms.ts` 的 `export const *Api` = **47**，**两个口径都得不出 29** | ✅ 全文订正为 27 并写明口径；新增 **11.2 文档计数纪律**：凡写入本文档的计数必须附可复跑测量命令 + 明确统计口径，「接口数」这类模糊词不再单独出现 |
+| 2026-11-23 | P2.2 有意的取舍 | mock 未模拟 `sys_user` 开通与审计日志写入（真实后端导入成功会做这两件事） | ⚠️ 登记 **L-IMP-6**：`Account.username` 是 4 个演示账号的字面量联合类型，塞工号进去会破坏 `/system/users`、`/system/audit-logs` 既有用例的计数断言。改由 `api-smoke.ps1` 在真实库核对；对话框提示语也刻意写成「真实后端会以工号开通」而非谎报已完成 |
+| 2026-11-23 | P2.2 复跑记录 | 按 CI 等价条件复跑（`CI=true` + `E2E_CHANNEL=chromium`，Playwright 自建 dev server、`workers=2`） | ✅ **51 passed (47.9s)**。仍不勾销 L-CI-1：本机等价复跑 ≠ GitHub runner 实跑 |
 
 ---
 
@@ -269,11 +299,11 @@
 | ~~L-FE-3~~ | ~~`UserProfile.isActive` 在 TS 里标成 `number`，而 `auth_controller.cj:34` 出参是 `${r[4] == "1"}`（**布尔**）~~ | ~~任何 `user.isActive === 1` 的写法静默恒假，且 `vue-tsc` 不会报错~~ | ✅ **已修**：类型改为 `boolean` 并注释标明后端出处；mock 里原有的 `true as unknown as number` 强转一并删除（该强转本身就是这个偏差的化石证据）。当前无消费方，属**消除陷阱**而非修复线上故障 |
 | ~~L-FE-4~~ | ~~考勤「修正」弹窗只回传 `status`/`remark`，后端对 `lateMinutes`/`earlyMinutes` 取 `getJsonInt(..., 0)`~~ | ~~一次修正即把迟到分钟数清零，进而让「迟到/早退次数」与算薪扣款失真~~ | ✅ **已修 + 已加回归锁**：[attendance.spec.ts:144](./frontend-web/e2e/attendance.spec.ts) 「修正考勤不得抹掉迟到分钟数」钉住回传当前分钟数这一行为 |
 | ~~L-FE-5~~ | ~~`auth.user` 只从 `localStorage.hrms_user` 水合（登录那一刻的快照），旧守卫仅在 `!auth.user` 时回源 `/auth/me` ⇒ **整页刷新永不刷新画像**~~ | ~~管理员被改角色后仍按旧角色放行菜单；审批通过的年假已扣但页面显示旧余额；账号被禁用仍停留在已登录视图~~ | ✅ **已修**：[router/index.ts](./frontend-web/src/router/index.ts) 增加模块级 `profileSynced`，每次整页加载后首次进入受保护路由强制 `refreshProfile()` 一次（来源为 `/login` 时跳过）。回归由 `approval.spec.ts` 的三处年假余额断言（含 `page.reload()` 后仍为 `4`）钉死。**注意**：该守卫的 `catch` 对 401 以外的异常**保留本地画像放行**，这是刻意取舍——不能让后端抖动把已登录用户踢下线，代价是极端情况下仍可能短暂看到旧数据 |
-| L-MOCK-1 | E2E 的 29 个接口由**有状态内存 mock** 提供，`E2E_REAL=1` 直连真实后端的路径**从未跑过**（无 SDK，后端起不来） | 「42 passed」证明的是**前端逻辑 + 前端对契约的理解**自洽，不等于**后端实现无缺陷** | 与 `L-SMOKE-1` 同性质。所有 mock 契约均逐字段 `Read` 自 `backend-cangjie/src`（第九节有取证行），SDK 就位后首件事是 `E2E_REAL=1` 复跑；届时失败**默认判为 mock 与后端的漂移**，以源码为准修 mock |
+| L-MOCK-1 | E2E 的 27 条 `route()` 分发条目（口径见 11.2，原写「29 个接口」系口算错）由**有状态内存 mock** 提供，`E2E_REAL=1` 直连真实后端的路径**从未跑过**（无 SDK，后端起不来） | 「51 passed」证明的是**前端逻辑 + 前端对契约的理解**自洽，不等于**后端实现无缺陷** | 与 `L-SMOKE-1` 同性质。所有 mock 契约均逐字段 `Read` 自 `backend-cangjie/src`（第九节有取证行），SDK 就位后首件事是 `E2E_REAL=1` 复跑；届时失败**默认判为 mock 与后端的漂移**，以源码为准修 mock。**P2.2 新入这条风险的最大实例**：mock 此前**完全没有 `/employees` 路由**，员工花名册在 P1.3~P2.1 期间其实是「前端写好、E2E 从未覆盖列表」的空白区，直到 P2.2 需要「导入后回列表检索」才暴露 ⇒ 已补 `GET /employees`（20 出参 + 4 筛选 + MANAGER 限本部门 + 分页回落）与 `POST /employees/import` |
 | L-MOCK-2 | mock 是「按我读到的源码写的」，存在**读错字段**的残余风险 | 字段名/口径同时写错时 mock 与 spec 会自洽假绿 | 缓解手段是 teardown 的 `unmatched == []` 闸门（前端发起而 mock 未实现的接口必红）+ 分页/鉴权分支照抄后端语义；**根治手段只有 `E2E_REAL=1`**，见 L-MOCK-1 |
 | L-E2E-1 | 整页加载后的 `page.on('request')` 监听器**只能在导航之后挂载**，早于监听器完成的请求采不到 | 对采到的请求做 `toEqual([精确数组])` 会退化成**计时器**，随机假绿/假红（`payroll.spec.ts` 的旧断言就假绿了若干轮才被揭穿） | 纪律固化：**导航后一律断言「不该出现的为空集」+ `toContain(关键项)`，禁止精确数组**；确需精确计数时改用 `page.route` 侧计数（拦截点必然全采） |
 | L-E2E-2 | `--workers` 在本终端默认取到 `2`（`CI` 环境变量为真） | 与本地 `vite` 单实例预览服务并发时偶发抖动，报错形态像用例问题 | 本地复跑显式 `--workers=1`；CI 里由 Playwright 自己起 preview，不受此影响 |
-| L-CI-1 | `ci.yml` 的**前端两个 job 尚未在 GitHub runner 上真跑过**（本机只能做到「等价条件复现」：`CI=true` + `E2E_CHANNEL=chromium` + 自建 dev server，42 passed） | runner 镜像差异（apt 依赖、Node 22 预装版本、`npm ci` 跨平台可选依赖）仍可能造成首跑失败 | 首次推送后**必须去看一眼 Actions 的实际结果**，失败即回来修 workflow，不许默认它绿。已尽量降低风险：浏览器不依赖 runner 预装（显式 `playwright install --with-deps chromium`）、依赖用 `npm ci` 锁死、`node-version: '22'` 与本机同大版本 |
+| L-CI-1 | `ci.yml` 的**前端两个 job 尚未在 GitHub runner 上真跑过**（本机只能做到「等价条件复现」：`CI=true` + `E2E_CHANNEL=chromium` + 自建 dev server，P2.2 后复跑 **51 passed (47.9s)**） | runner 镜像差异（apt 依赖、Node 22 预装版本、`npm ci` 跨平台可选依赖）仍可能造成首跑失败 | 首次推送后**必须去看一眼 Actions 的实际结果**，失败即回来修 workflow，不许默认它绿。已尽量降低风险：浏览器不依赖 runner 预装（显式 `playwright install --with-deps chromium`）、依赖用 `npm ci` 锁死、`node-version: '22'` 与本机同大版本 |
 | L-CI-2 | `backend` job 默认 `skipped`，且其 SDK 安装步骤是**空的**（只有 `command -v cjpm` 检查）；`api-smoke` 步骤**故意 `exit 1`** | 仓库里看不到后端 CI 信号；若误开 `BACKEND_CI_ENABLED` 会直接红 | 这是**有意的**。禁止用 `continue-on-error`/写死未核实下载地址来凑绿；真正启用需要：①核实并补上 SDK 安装 ②在 job 内起 MySQL 并导入 `sql/init.sql` ③拉起 8080 后再摘掉 smoke 的 `exit 1`。三步缺一不可 |
 | L-TMP-1 | 临时 `q_<seq>.sql` / `c_<seq>.cnf` 落盘 | 崩溃时残留含口令的 cnf 文件 | `finally` 里 `removeQuiet`；建议部署机对 `tmp_sql` 目录开启 ACL 限制 |
 | L-COV-1 | 无 CI 运行后端测试 | 单测写了但跑不起来 | `cjpm test` 已按官方规范编写，SDK 就位即可执行 |
@@ -284,6 +314,9 @@
 | L-IMP-2 | 导入的**传输契约偏离了第四节的原始描述**（CSV 文本交后端解析，而非前端解析后传 JSON 数组） | 若后来者按第四节旧文实现前端，会打出后端不认的 body 结构 | 已在第四节就地改写契约 + 在 `employee_controller.cj` 的 P2.1 段头注释里写明理由；P2.2 必须以「P2.1 契约」小节为唯一依据 |
 | L-IMP-3 | 批量写库把 `START TRANSACTION` / 多值 `INSERT` / `INSERT…SELECT` / `COMMIT` 拼成**一条 SQL 文本**交给 `executeSql` | 依赖 mysql 客户端对多语句批处理的默认行为；若服务端配置（如 `NO_BACKSLASH_ESCAPES`）异常，可能整批失败或字段错位 | 失败路径返回 500 + `lastDbErrorMessage()` 且**不落半批**；`sqlStr`/`sqlNullableStr` 沿用基线同一转义口径，未新造转义逻辑 |
 | L-IMP-4 | 导入时**静默跳过全空行**（不计入 `total`，也不报错） | 用户若想确认「模板里有多少空行」得不到提示 | 有意取舍：Excel 另存为常带尾随空行，若按数据行校验会一次报出 6 条必填错误并淹没真错误。判据 `csvRowIsBlank` 已单独建单测锁住语义 |
+| **L-IMP-5** | 前端 `parseCsv` 与后端 `parseCsvInto` 是**两份独立实现**（TS / 仓颉），逐字符同语义靠人工维护，**无自动比对** | 任一侧改了引号/换行/空行处理而另一侧没跟上，就会出现「预览 8 行、后端算 9 行」或**错误行号错位**（真实事故形态：用户按行号改文件却改错行） | ① 12.10 的 17 组 ground truth 同时是**两侧的共同断言源**：后端 35 个 `@TestCase` 取其中若干，前端 `employee-import.spec.ts` 的「引号内逗号与换行」用例取引号+物理行号这一组；② 前端预览的 `数据 N 行` 直接来自前端解析，若与后端返回的 `total` 不一致，用例「预检 2 行 / 校验 3 行」会红。**SDK 就位后的第一件事**应是 `E2E_REAL=1` 跑这 9 个用例，让真后端来验收前端解析器 |
+| **L-IMP-6** | E2E mock **刻意不模拟** 导入时的 `sys_user` 开通与审计日志写入 | 「导入后能用工号登录」「审计里能查到这次导入」这两条**E2E 全绿也证明不了** | 有意的取舍，理由写在 `mock-server.ts` 注释里：`Account.username` 是 4 个演示账号的**字面量联合类型**，把工号塞进去会污染 `/system/users` 与 `/system/audit-logs` 既有用例的计数断言。改由 `api-smoke.ps1` 在真实库上核对（该脚本已有 `/system/users` 与 `/system/audit-logs` 的断言点）。**对话框里也照实说**「真实后端会以工号开通账号」，不写成已完成 |
+| **L-IMP-7** | 导入超时在前端**单独放宽到 60s**，是全局 15s 的一个例外 | 若后端改为逐行 INSERT 或 MySQL 变慢，60s 也可能不够；反过来，恶意大文件会长时间占住连接 | 上限已由 `EMP_IMPORT_MAX_ROWS = 500` 与 mock 的同一常量双向钉住；`hrms.ts` 里写明放宽原因（整批一条 SQL 交 `mysql.exe`，500 行远超全局默认）。真实后端就位后应实测 500 行耗时再决定是否收回这个例外 |
 
 ---
 
@@ -384,6 +417,20 @@
 ② 必须做**反向自检** —— 往桩里注入 N 类真实缺陷，逐类确认脚本**必然变红**，否则该断言等于没写；
 ③ 客户端**独立复算**业务口径（如个税 `Get-ExpectedTax` 与后端 `calculateTax` 同规则、不同实现），
 防「前后端在同一处逻辑上写错却互相印证」。
+
+### 11.2 文档计数纪律（P2.2 建立，起因是本文档自己犯过一次口算错）
+
+P1.3 收口时把 mock 覆盖量写成「**29 个接口**」，沿用数轮到 P2.2 才被发现：实测 `mock-server.ts` 里
+`if (method ===` 的分发条目只有 25 条（P2.2 后 27 条），`src/api/hrms.ts` 的 `*Api` 导出是 47 个，
+**两个口径都得不出 29**。这类数字一旦进入文档就会被后续章节当事实引用，危害等同于代码里的错断言。
+
+**规则**：写入本文档的**任何计数**（接口数、用例数、断言点数、文件数、行数）必须满足：
+1. 附**可复跑的测量命令**（`Select-String ... | Measure-Object` / `git diff --shortstat` / Playwright 汇总行）；
+2. 明确**统计口径**（"分发条目数" 与 "接口数" 不是一回事，必须写清是哪一个）；
+3. 该数字**变了必须同步改**，改不动就在原处标注"截至 X 轮"。
+
+本轮据此重算并订正的三处：第四节「29 个接口」→ 27 条分发条目；`L-MOCK-1` 与第四节的用例数 → **51 passed**；
+第十二节新增 12.11 记录导入功能的前后端契约测量值。
 
 ---
 
@@ -607,6 +654,43 @@
 > 第 13/17 组是本轮**唯一由复算推翻手写期望**的地方：最初按「空行不产记录」写断言，
 > 复算证明解析器为 1 条 / 3 条。结论是语义留在解析器（忠实还原 CSV），
 > 策略放到调用方（`doEmployeeImport` 用 `csvRowIsBlank` 剔空行），见 L-IMP-4。
+
+### 12.11 P2.2 前端链路的测量值（全部为命令实跑输出，非口算）
+
+**E2E 清单**（测量命令：`npx playwright test --workers=1 --reporter=line`，工作目录 `frontend-web`）
+
+| spec | 用例数 | 来源 |
+| --- | --- | --- |
+| auth / rbac-menu / attendance / payroll / approval | 42 | P1.3 既有 |
+| **employee-import** | **9** | **P2.2 新增** |
+| 合计 | **51 passed** | `--workers=1`；按 CI 等价条件（`CI=true` + `E2E_CHANNEL=chromium`，Playwright 自建 dev server）复跑得 **51 passed (47.9s)** |
+
+`employee-import.spec.ts` 的 9 条逐个存在理由（不是凑覆盖率）：
+
+| # | 用例 | 钉住的行为 | 若删掉会失去什么 |
+| --- | --- | --- | --- |
+| 1 | 下载模板 | 模板 13 列名与后端 `empImportHeader()` **逐字**相同、`\uFEFF` 起头、示例部门取自种子 | 后端改列名而前端模板不改 ⇒ 用户下载即报错 |
+| 2 | 预检不写库 | `dryRun` 语义：返回 `total/imported:[]` 但列表**真的没变** | 「只校验」实现成「偷偷写入」 |
+| 3 | 取消预检后正式导入 | 两次提交间状态复位 + 导入后按工号可检索 | 前端只改了 mock 内存而列表没回读 ⇒ 假绿 |
+| 4 | 行级错误定位 | 第 2 行部门不存在、第 3 行手机号非数字，**合法行仍不写库** | 12.10 的「策略在调用方」这条设计失效无人发现 |
+| 5 | 文件内工号重复 | `工号 X 在本次文件内重复` 走的是**批内去重**，与「已存在于系统」是两条分支 | 重复行被静默合并成一条 |
+| 6 | 带 BOM 不误报 | 前端 `replace(/^\uFEFF/,'')` 生效，表头判定不被 BOM 破坏 | Excel 存的 CSV 一律被判「表头不匹配」 |
+| 7 | 引号内逗号/换行 | 单字段含 `,` 与 `\n`，且**错误行号报物理行 4 而非逻辑第 2 条** | 12.10 第 9/10 组的行号语义在前端侧无人验证 |
+| 8 | MANAGER 无入口 | 能看到花名册、看不到「批量导入」（后端 `requireRoles(["ADMIN","HR"])`） | 权限只靠后端拦，前端漏出入口按钮 |
+| 9 | EMPLOYEE 直达被拦 | 路由守卫在挂载前退回 `/dashboard` | 无权角色进得来页面，只剩接口 403 |
+
+**代码量测量**（`git diff --stat` + `Get-Content .Count`）
+
+| 文件 | 变化 |
+| --- | --- |
+| `frontend-web/src/api/hrms.ts` | +25 |
+| `frontend-web/src/views/employee/EmployeeView.vue` | +325（现 843 行） |
+| `frontend-web/e2e/support/mock-server.ts` | +311（现 1482 行） |
+| `frontend-web/e2e/employee-import.spec.ts` | 新增 222 行 |
+| 合计 | **883 行**（含空行与注释） |
+
+**静态闸门实测**：`npm run typecheck` exit 0 / `npm run lint`（`--max-warnings 0`）exit 0 / `npm run build` exit 0（仅 `echarts` chunk >500 kB 的既存体积提示）。
+
 
 ---
 

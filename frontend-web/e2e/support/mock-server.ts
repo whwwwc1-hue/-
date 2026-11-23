@@ -11,6 +11,7 @@
  *   - controller/request_controller.cj     → 申请、审批（含年假扣减）、撤回
  *   - controller/payroll_controller.cj     → 算薪公式（5000 起征、18.5% 社保、21.75 日薪、1.5 倍加班）
  *   - controller/dashboard_controller.cj   → overview 的 kpis/图表/到期合同结构
+ *   - controller/employee_controller.cj    → 员工列表 20 字段、CSV 解析与批量导入校验
  *   - middleware/auth 守卫                  → 401/403 的状态码与文案
  *
  * ## 已知并有意保留的偏差（不要当 bug 修）
@@ -108,6 +109,18 @@ interface Employee {
   empStatus: string
   phone: string
   email: string
+  /**
+   * 以下字段是 GET /employees（employeeRowToJson 共 20 个出参）需要的完整口径。
+   * init.sql 的种子行里没有落这些列，因此做成可选、由 employeeRowJson 给确定性缺省值；
+   * 批量导入进来的新员工则会全部显式赋值，正好覆盖两条分支。
+   */
+  gender?: number
+  positionId?: number
+  idCard?: string
+  probationEndDate?: string
+  resignDate?: string
+  resignReason?: string
+  createdAt?: string
 }
 
 /** 字段名严格等于 attendance_controller.cj 的 attendanceRowToJson。 */
@@ -621,6 +634,11 @@ export class MockBackend {
     if (method === 'GET' && path === '/system/users') return this.needRoles(call, ['ADMIN'], () => this.onSystemUsers())
     if (method === 'GET' && path === '/system/audit-logs') return this.needRoles(call, ['ADMIN'], () => this.onAuditLogs(call))
 
+    /* ---------- 员工档案与批量导入（import 用例触达，契约见 employee_controller） ---------- */
+    if (method === 'GET' && path === '/employees') return this.needRoles(call, ['ADMIN', 'HR', 'MANAGER'], () => this.onEmployeeList(call))
+    // 精确路径必须排在 /employees/{id} 之类的正则之前，否则 import 会被当成 id 解析
+    if (method === 'POST' && path === '/employees/import') return this.needRoles(call, ['ADMIN', 'HR'], () => this.onEmployeeImport(call))
+
     return null
   }
 
@@ -635,6 +653,299 @@ export class MockBackend {
     if (call.authFailure) return err(401, call.authFailure)
     if (!roles.includes((call.account as Account).role)) return err(403, '权限不足，禁止访问该接口')
     return next()
+  }
+
+  /* ------------------------------------------------- 员工档案（列表 + 批量导入）
+   *
+   * 镜像 employee_controller.cj：employeeRowToJson 的 20 个输出字段、
+   * doEmployeeImport 的解析/剔空行/表头匹配/逐行校验/整批事务语义。
+   * 校验分支与错误文案逐字对齐（field 与 reason 都会被 E2E 断言）。
+   * -------------------------------------------------------------- */
+
+  /** 与后端 maskIdCard 同口径：前 6 后 4 保留，中间打星；<=10 字符原样返回。 */
+  private maskIdCard(raw: string): string {
+    const s = raw.trim()
+    if (s.length <= 8) return s
+    const chars = [...s]
+    if (chars.length <= 10) return s
+    return chars.map((c, i) => (i < 6 || i >= chars.length - 4 ? c : '*')).join('')
+  }
+
+  /** 输出字段名严格等于 employeeRowToJson；idCard 出参即已脱敏。 */
+  private employeeRowJson(e: Employee) {
+    return {
+      id: e.id,
+      empNo: e.empNo,
+      name: e.name,
+      gender: e.gender ?? 1,
+      phone: e.phone,
+      email: e.email ?? '',
+      idCard: this.maskIdCard(e.idCard ?? ''),
+      deptId: e.deptId,
+      deptName: e.deptName,
+      positionId: e.positionId ?? 0,
+      positionName: e.positionName,
+      baseSalary: e.baseSalary,
+      annualLeaveBalance: e.annualLeaveBalance,
+      hireDate: e.hireDate,
+      probationEndDate: e.probationEndDate ?? '',
+      contractEndDate: e.contractEndDate,
+      resignDate: e.resignDate ?? '',
+      resignReason: e.resignReason ?? '',
+      status: e.empStatus,
+      createdAt: e.createdAt ?? `${e.hireDate} 10:00:00`
+    }
+  }
+
+  private onEmployeeList(call: Call): Reply {
+    const account = call.account as Account
+    const page0 = Number(call.query.get('page') ?? 1)
+    const size0 = Number(call.query.get('pageSize') ?? 10)
+    // 与后端一致：非法分页参数静默回落到默认值，而不是报错
+    const page = page0 < 1 ? 1 : page0
+    const pageSize = size0 < 1 || size0 > 100 ? 10 : size0
+    const keyword = (call.query.get('keyword') ?? '').trim()
+    const status = (call.query.get('status') ?? '').trim()
+    const deptId = Number(call.query.get('deptId') ?? 0)
+
+    let rows = [...this.employees]
+    if (account.role === 'MANAGER') {
+      // MANAGER 只看本部门，且请求里的 deptId 一律忽略（后端 elif 就是这个语义）
+      rows = rows.filter((e) => e.deptId === this.employee(account.employeeId).deptId)
+    } else if (deptId > 0) {
+      rows = rows.filter((e) => e.deptId === deptId)
+    }
+    if (status) rows = rows.filter((e) => e.empStatus === status)
+    if (keyword) {
+      rows = rows.filter((e) => e.name.includes(keyword) || e.empNo.includes(keyword) || e.phone.includes(keyword))
+    }
+    rows.sort((a, b) => b.id - a.id)
+    const total = rows.length
+    return ok(pageData(rows.slice((page - 1) * pageSize, page * pageSize).map((e) => this.employeeRowJson(e)), total, page, pageSize))
+  }
+
+  /** 与 parseCsvInto/csvSplitRows 同语义：引号、"" 转义、引号内换行不分行、CRLF/CR/LF 均可。 */
+  private parseCsv(text: string): { rows: string[][]; lines: number[] } {
+    const rows: string[][] = []
+    const lines: number[] = []
+    let row: string[] = []
+    let field = ''
+    let inQuotes = false
+    let line = 1
+    let rowStart = 1
+    // 后端剥 UTF-8 BOM，这里同口径，否则第一列表头永远匹配不上
+    const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+    for (let i = 0; i < body.length; i++) {
+      const ch = body[i]
+      if (ch === '\r' || ch === '\n') {
+        const pair = ch === '\r' && body[i + 1] === '\n'
+        if (inQuotes) {
+          field += ch
+          if (pair) {
+            field += '\n'
+            i += 1
+          }
+          line += 1
+          continue
+        }
+        if (pair) i += 1
+        row.push(field)
+        rows.push(row)
+        lines.push(rowStart)
+        row = []
+        field = ''
+        line += 1
+        rowStart = line
+        continue
+      }
+      if (inQuotes) {
+        if (ch === '"') {
+          if (body[i + 1] === '"') {
+            field += '"'
+            i += 1
+          } else {
+            inQuotes = false
+          }
+        } else {
+          field += ch
+        }
+        continue
+      }
+      if (ch === '"') inQuotes = true
+      else if (ch === ',') {
+        row.push(field)
+        field = ''
+      } else field += ch
+    }
+    if (field !== '' || row.length > 0) {
+      row.push(field)
+      rows.push(row)
+      lines.push(rowStart)
+    }
+    return { rows, lines }
+  }
+
+  /** 与后端 empImportHeader 逐字一致。 */
+  private importHeader(): string[] {
+    return ['工号', '姓名', '性别', '手机号', '邮箱', '身份证号', '部门', '岗位', '基本薪资', '年假余额', '入职日期', '合同到期日期', '状态']
+  }
+
+  private cell(row: string[], idx: number): string {
+    return idx < 0 || idx >= row.length ? '' : (row[idx] ?? '').trim()
+  }
+
+  private importGender(raw: string): number {
+    const s = raw.trim().toUpperCase()
+    if (s === '1' || s === '男' || s === 'M' || s === 'MALE') return 1
+    if (s === '2' || s === '女' || s === 'F' || s === 'FEMALE') return 2
+    return 0
+  }
+
+  private importStatus(raw: string): string {
+    const s = raw.trim().toUpperCase()
+    if (s === 'ACTIVE' || s === '在职') return 'ACTIVE'
+    if (s === 'PROBATION' || s === '试用期') return 'PROBATION'
+    if (s === 'RESIGNED' || s === '离职') return 'RESIGNED'
+    return ''
+  }
+
+  private validYmd(s: string): boolean {
+    return /^\d{4}-\d{2}-\d{2}$/.test(s)
+  }
+
+  private onEmployeeImport(call: Call): Reply {
+    const csv = String(call.body.csv ?? '')
+    const dryRun = Boolean(call.body.dryRun)
+    if (!csv.trim()) return err(400, 'CSV 内容不能为空')
+    const { rows: parsed, lines: allLines } = this.parseCsv(csv)
+    if (parsed.length < 1) return err(400, 'CSV 至少需要表头与一条数据')
+    // 后端 csvRowIsBlank：整行全空的记录直接剔掉，行号同步剔除，避免刷出成堆「不能为空」
+    const rows: string[][] = []
+    const lines: number[] = []
+    for (let i = 0; i < parsed.length; i++) {
+      if (!parsed[i].every((c) => c.trim() === '')) {
+        rows.push(parsed[i])
+        lines.push(allLines[i])
+      }
+    }
+    const dataCount = Math.max(rows.length - 1, 0)
+    if (dataCount === 0) return err(400, 'CSV 至少需要表头与一条数据')
+    if (dataCount > 500) return err(400, `单次最多导入 500 行，当前 ${dataCount} 行`)
+
+    const header = rows[0].map((h) => h.trim())
+    const missing = this.importHeader().filter((c) => !header.includes(c))
+    if (header.length < 13 && missing.length === 13) return err(400, '未匹配到任何模板列名，请使用系统提供的模板')
+    const col = (name: string): number => header.indexOf(name)
+
+    const deptNames = this.departments.map((d) => d.deptName)
+    const existingEmpNos = this.employees.map((e) => e.empNo)
+    const fileEmpNos: string[] = []
+    const accepted: number[] = []
+    const failed: { row: number; field: string; reason: string }[] = []
+
+    for (let ridx = 1; ridx < rows.length; ridx++) {
+      const row = rows[ridx]
+      const lineNo = lines[ridx]
+      const before = failed.length
+      let okRow = true
+      const push = (field: string, reason: string): void => {
+        failed.push({ row: lineNo, field, reason })
+        okRow = false
+      }
+      const empNo = this.cell(row, col('工号'))
+      const name = this.cell(row, col('姓名'))
+      const phone = this.cell(row, col('手机号'))
+      const deptName = this.cell(row, col('部门'))
+      const posName = this.cell(row, col('岗位'))
+      const hireDate = this.cell(row, col('入职日期'))
+
+      if (empNo === '') push('工号', '不能为空')
+      else if ([...empNo].length > 32) push('工号', '长度超过 32 字符')
+      else if (fileEmpNos.includes(empNo)) push('工号', `工号 ${empNo} 在本次文件内重复`)
+      else if (existingEmpNos.includes(empNo)) push('工号', `工号 ${empNo} 已存在于系统，导入不覆盖已有档案`)
+
+      if (name === '') push('姓名', '不能为空')
+      else if ([...name].length > 64) push('姓名', '长度超过 64 字符')
+
+      if (phone !== '' && !/^\d+$/.test(phone)) push('手机号', '手机号只能由数字组成')
+      if (phone === '') push('手机号', '不能为空')
+
+      if (deptName !== '' && !deptNames.includes(deptName)) push('部门', `部门「${deptName}」不存在，请先在组织架构中创建`)
+      if (deptName === '') push('部门', '不能为空')
+
+      if (posName === '') push('岗位', '不能为空')
+      if (hireDate === '') push('入职日期', '不能为空')
+      else if (!this.validYmd(hireDate)) push('入职日期', `日期格式应为 YYYY-MM-DD，实际为「${hireDate}」`)
+
+      const genderRaw = this.cell(row, col('性别'))
+      if (genderRaw !== '' && this.importGender(genderRaw) === 0) push('性别', '只接受 1/2 或 男/女')
+
+      const salaryRaw = this.cell(row, col('基本薪资'))
+      if (salaryRaw !== '' && !(Number(salaryRaw) >= 0)) push('基本薪资', '不是合法数字')
+
+      const contractRaw = this.cell(row, col('合同到期日期'))
+      if (contractRaw !== '' && !this.validYmd(contractRaw)) push('合同到期日期', `日期格式应为 YYYY-MM-DD，实际为「${contractRaw}」`)
+
+      const statusRaw = this.cell(row, col('状态'))
+      if (statusRaw !== '' && this.importStatus(statusRaw) === '') push('状态', '只接受 PROBATION/ACTIVE/RESIGNED 或 试用期/在职/离职')
+
+      const idCard = this.cell(row, col('身份证号'))
+      if (idCard !== '' && [...idCard].length !== 15 && [...idCard].length !== 18) push('身份证号', '长度应为 15 或 18 位')
+
+      const email = this.cell(row, col('邮箱'))
+      if (email !== '' && !email.includes('@')) push('邮箱', '缺少 @ 符号')
+
+      // 后端契约：返回 false 必然写过至少一条错误，否则视为校验器内部异常
+      if (!okRow && failed.length === before) push('整行', '校验器内部异常，请改用单条入职登记')
+      if (okRow) {
+        accepted.push(ridx)
+        fileEmpNos.push(empNo)
+      }
+    }
+
+    const failedRows = rows.length - 1 - accepted.length
+    if (failedRows > 0) {
+      return okMsg(`校验未通过 ${failedRows} 行，整批未写入`, {
+        total: dataCount, successCount: accepted.length, failedCount: failedRows, imported: 0, dryRun, failed
+      })
+    }
+    if (dryRun) {
+      return okMsg(`试运行通过 ${accepted.length} 行，未写入`, {
+        total: dataCount, successCount: accepted.length, failedCount: 0, imported: 0, dryRun, failed
+      })
+    }
+    for (const ridx of accepted) {
+      const row = rows[ridx]
+      const empNo = this.cell(row, col('工号'))
+      const deptName = this.cell(row, col('部门'))
+      const dept = this.departments.find((d) => d.deptName === deptName) as DeptSeed
+      const employee: Employee = {
+        id: this.nextId(),
+        empNo,
+        name: this.cell(row, col('姓名')),
+        deptId: dept.id,
+        deptName,
+        positionName: this.cell(row, col('岗位')),
+        baseSalary: Number(this.cell(row, col('基本薪资')) || 8000),
+        annualLeaveBalance: Number(this.cell(row, col('年假余额')) || 5),
+        hireDate: this.cell(row, col('入职日期')),
+        contractEndDate: this.cell(row, col('合同到期日期')),
+        empStatus: this.importStatus(this.cell(row, col('状态'))) || 'PROBATION',
+        phone: this.cell(row, col('手机号')),
+        email: this.cell(row, col('邮箱')),
+        gender: this.importGender(this.cell(row, col('性别'))) || 1,
+        idCard: this.cell(row, col('身份证号'))
+      }
+      this.employees.push(employee)
+    }
+    // 后端 persistImport 还在同一事务里 INSERT INTO sys_user（按工号开通登录账号）并写审计日志。
+    // 这两项在本页面对前端完全不可观测，而 this.accounts / this.auditLogs 的元素类型是
+    // 4 个演示账号与静态审计行的封闭集合（username: DemoAccount），塞进导入出来的工号
+    // 会同时破坏 GET /system/users 与 /system/audit-logs 既有用例的计数断言。
+    // 故刻意不模拟，改由 api-smoke.ps1 的 112 个断言点在真实库上核对账号是否开通。
+    return okMsg(`导入成功 ${accepted.length} 条`, {
+      total: dataCount, successCount: accepted.length, failedCount: 0, imported: accepted.length, dryRun, failed
+    })
   }
 
   /* -------------------------------------------------------------- 认证 */

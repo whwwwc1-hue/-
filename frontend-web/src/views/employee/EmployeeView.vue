@@ -22,6 +22,9 @@
         <el-button type="primary" plain icon="Search" @click="handleSearch">查询</el-button>
       </div>
 
+      <el-button v-if="isHrOrAdmin" icon="UploadFilled" data-testid="btn-import" @click="openImportDialog">
+        批量导入
+      </el-button>
       <el-button v-if="isHrOrAdmin" type="primary" icon="Plus" @click="openCreateDialog">
         办理入职
       </el-button>
@@ -195,6 +198,103 @@
       </template>
     </el-dialog>
 
+    <!-- 批量导入 Dialog（P2.2，对接 P2.1 的 POST /employees/import） -->
+    <el-dialog v-model="importDialogVisible" title="员工花名册批量导入" width="820px" destroy-on-close>
+      <div class="space-y-4">
+        <!-- ① 模板 -->
+        <div class="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+          <div class="text-xs leading-5 text-slate-600">
+            模板共 {{ IMPORT_COLUMNS.length }} 列，表头名称必须逐字一致；单次上限 {{ IMPORT_MAX_ROWS }} 行数据；
+            任一错误整批不写库。性别可填 男/女/1/2/M/F，状态可填 ACTIVE / PROBATION / RESIGNED 或在职 / 试用期 / 离职。
+          </div>
+          <el-button size="small" icon="Download" class="shrink-0" @click="downloadCsvTemplate">下载模板</el-button>
+        </div>
+
+        <!-- ② 选文件 -->
+        <div class="flex flex-wrap items-center gap-3">
+          <el-button size="small" data-testid="btn-pick-file" @click="pickImportFile">选择 CSV 文件</el-button>
+          <input
+            ref="importFileInput"
+            type="file"
+            accept=".csv,text/csv"
+            data-testid="import-file"
+            class="hidden"
+            @change="onImportFileChange"
+          />
+          <span v-if="importFileName" class="text-xs text-slate-700">
+            {{ importFileName }} · {{ importEncoding }} · 数据 {{ importDataCount }} 行
+          </span>
+          <span v-else class="text-xs text-slate-400">尚未选择文件（CSV 纯文本，不是 xlsx）</span>
+        </div>
+        <div v-if="importFileName && !importHeaderOk" class="text-xs text-rose-600">
+          表头与模板不完全一致，导入后缺少的列会逐行报「必填列缺失」并导致整批不写库。
+        </div>
+        <div v-if="importDataCount > IMPORT_MAX_ROWS" class="text-xs text-rose-600">
+          当前 {{ importDataCount }} 行，超过后端上限 {{ IMPORT_MAX_ROWS }} 行，请拆分文件后分批导入。
+        </div>
+
+        <!-- ③ 预览 -->
+        <div v-if="importPreview.length">
+          <div class="mb-2 text-xs font-semibold text-slate-700">
+            数据预览（前 {{ importPreview.length }} 行；行号 = CSV 里的物理行号，与后端报错行号一致）
+          </div>
+          <el-table :data="importPreview" border size="small" max-height="230">
+            <el-table-column prop="_line" label="行号" width="58" />
+            <el-table-column
+              v-for="(h, idx) in importPreviewCols"
+              :key="`${h}-${idx}`"
+              :prop="`c${idx}`"
+              :label="h || `第${idx + 1}列`"
+              min-width="96"
+              show-overflow-tooltip
+            />
+          </el-table>
+        </div>
+
+        <el-checkbox v-model="importDryRun" data-testid="import-dry-run">仅校验不写库（预检）</el-checkbox>
+
+        <!-- ④ 结果 -->
+        <div
+          v-if="importResult"
+          data-testid="import-result"
+          class="rounded-lg border p-3"
+          :class="importResult.failedCount ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'"
+        >
+          <div class="mb-2 text-xs font-semibold text-slate-800">
+            {{ importResult.dryRun ? '预检结果' : '导入结果' }}：共 {{ importResult.total }} 行 ·
+            通过 {{ importResult.successCount }} · 失败 {{ importResult.failedCount }} · 实际写入 {{ importResult.imported }}
+          </div>
+          <el-table
+            v-if="importResult.failed.length"
+            :data="importResult.failed"
+            border
+            size="small"
+            max-height="200"
+            data-testid="import-failures"
+          >
+            <el-table-column prop="row" label="行号" width="70" />
+            <el-table-column prop="field" label="字段" width="120" />
+            <el-table-column prop="reason" label="原因" min-width="280" />
+          </el-table>
+          <div v-else class="text-xs text-slate-600">
+            {{ importResult.dryRun ? '全部校验通过，取消勾选「预检」再提交即可写入。' : '全部校验通过，档案与登录账号已生成。' }}
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="importDialogVisible = false">关闭</el-button>
+        <el-button
+          type="primary"
+          data-testid="btn-submit-import"
+          :loading="importLoading"
+          :disabled="!importCsvText"
+          @click="submitImport"
+        >
+          {{ importDryRun ? '开始校验' : '开始导入' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- Employee 360 Detail Drawer -->
     <el-drawer v-model="detailVisible" title="员工 360° 全景档案" size="560px">
       <template v-if="detailData.employee">
@@ -250,10 +350,12 @@ import {
   getEmployeeDetailApi,
   getEmployeesApi,
   getPositionsApi,
+  importEmployeesApi,
   resignEmployeeApi,
   transferEmployeeApi,
   updateEmployeeApi
 } from '@/api/hrms'
+import type { EmployeeImportResult } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -509,6 +611,229 @@ async function submitResign() {
 async function openDetail(id: number) {
   detailData.value = await getEmployeeDetailApi(id)
   detailVisible.value = true
+}
+
+/* ---------------------------------------------- 批量导入（P2.2 / 对接 P2.1）
+ *
+ * 三条不可让的约束，都来自后端 employee_controller.cj 的真实契约：
+ *  1. body 是 { csv, dryRun } 纯文本，不是 multipart —— 所以编码识别必须在浏览器做完；
+ *     Excel「CSV UTF-8」带 BOM，而人事台账常是 GBK 导出的 ANSI CSV，两种都要能进。
+ *  2. failed[].row 是 CSV 的**物理行号**（引号内的换行不产生新行），
+ *     预览的行号必须同口径，否则用户照着预览去改数据会改错行。
+ *  3. 预览用的 CSV 解析器只是「显示尺」，判定权始终在后端；
+ *     这里刻意与 parseCsvInto 的状态机同语义，为的是不让预览比后端更宽松。
+ * -------------------------------------------------------------- */
+
+const IMPORT_COLUMNS = [
+  '工号',
+  '姓名',
+  '性别',
+  '手机号',
+  '邮箱',
+  '身份证号',
+  '部门',
+  '岗位',
+  '基本薪资',
+  '年假余额',
+  '入职日期',
+  '合同到期日期',
+  '状态'
+]
+// 与 EMP_IMPORT_MAX_ROWS 一致（后端常量，改一边就要改另一边）。
+const IMPORT_MAX_ROWS = 500
+const IMPORT_PREVIEW_LIMIT = 20
+const IMPORT_TEMPLATE_EXAMPLE = [
+  'EMP20269001',
+  '张三',
+  '男',
+  '13800000001',
+  'zhangsan@hrms.demo',
+  '110101199001011234',
+  '技术研发中心',
+  '仓颉后端工程师',
+  '12000',
+  '5',
+  '2026-01-05',
+  '2029-01-04',
+  '试用期'
+]
+
+const importDialogVisible = ref(false)
+const importFileInput = ref<HTMLInputElement>()
+const importFileName = ref('')
+const importEncoding = ref('')
+const importCsvText = ref('')
+const importRows = ref<string[][]>([])
+const importHeaderOk = ref(false)
+const importPreview = ref<Record<string, string | number>[]>([])
+const importPreviewCols = ref<string[]>([])
+const importDryRun = ref(true)
+const importLoading = ref(false)
+const importResult = ref<EmployeeImportResult | null>(null)
+
+// 后端会剔掉整行全空的记录（csvRowIsBlank），total 也不计它们；预览同理。
+function csvRowBlank(row: string[]): boolean {
+  return row.every((c) => c.trim() === '')
+}
+
+const importDataCount = computed(() => importRows.value.slice(1).filter((r) => !csvRowBlank(r)).length)
+
+/** 与后端 parseCsvInto 同语义的最小实现：引号、"" 转义、CRLF/CR/LF、引号内换行不分行。 */
+function parseCsv(text: string): { rows: string[][]; lines: number[] } {
+  const rows: string[][] = []
+  const lines: number[] = []
+  let row: string[] = []
+  let field = ''
+  let inQuotes = false
+  let line = 1
+  let rowStart = 1
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === '\r' || ch === '\n') {
+      const pair = ch === '\r' && text[i + 1] === '\n'
+      if (inQuotes) {
+        // 引号内的换行属于字段值，只推进物理行号，不结束记录
+        field += ch
+        if (pair) {
+          field += '\n'
+          i += 1
+        }
+        line += 1
+        continue
+      }
+      if (pair) i += 1
+      row.push(field)
+      field = ''
+      rows.push(row)
+      lines.push(rowStart)
+      row = []
+      line += 1
+      rowStart = line
+      continue
+    }
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"'
+          i += 1
+        } else {
+          inQuotes = false
+        }
+      } else {
+        field += ch
+      }
+      continue
+    }
+    if (ch === '"') {
+      inQuotes = true
+    } else if (ch === ',') {
+      row.push(field)
+      field = ''
+    } else {
+      field += ch
+    }
+  }
+  // 无尾换行的末行同样是一条记录 —— 漏掉它是最典型的导入 bug
+  if (field !== '' || row.length > 0) {
+    row.push(field)
+    rows.push(row)
+    lines.push(rowStart)
+  }
+  return { rows, lines }
+}
+
+/** UTF-8 优先（fatal 让非法字节真正抛错），失败回落 GBK；label 供界面如实告知用户。 */
+async function decodeCsvFile(file: File): Promise<{ text: string; encoding: string }> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  try {
+    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), encoding: 'UTF-8' }
+  } catch {
+    return { text: new TextDecoder('gbk').decode(bytes), encoding: 'GBK' }
+  }
+}
+
+function buildImportPreview(rows: string[][], lines: number[]) {
+  const header = (rows[0] ?? []).map((h) => h.trim())
+  importPreviewCols.value = header
+  const out: Record<string, string | number>[] = []
+  for (let i = 1; i < rows.length && out.length < IMPORT_PREVIEW_LIMIT; i++) {
+    if (csvRowBlank(rows[i])) continue
+    const item: Record<string, string | number> = { _line: lines[i] }
+    header.forEach((_h, idx) => {
+      item[`c${idx}`] = rows[i][idx] ?? ''
+    })
+    out.push(item)
+  }
+  importPreview.value = out
+}
+
+function openImportDialog() {
+  importFileName.value = ''
+  importEncoding.value = ''
+  importCsvText.value = ''
+  importRows.value = []
+  importPreview.value = []
+  importPreviewCols.value = []
+  importHeaderOk.value = false
+  importResult.value = null
+  importDryRun.value = true
+  importDialogVisible.value = true
+}
+
+function pickImportFile() {
+  importFileInput.value?.click()
+}
+
+async function onImportFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  const { text, encoding } = await decodeCsvFile(file)
+  // BOM 必须剥掉：带着它第一列表头会变成 <BOM>工号，后端逐列匹配全盘失败，
+  // 表现却是「官方模板也导不进去」——最难定位的一种故障。
+  importCsvText.value = text.replace(/^\uFEFF/, '')
+  importEncoding.value = encoding
+  importFileName.value = file.name
+  importResult.value = null
+  const { rows, lines } = parseCsv(importCsvText.value)
+  importRows.value = rows
+  const header = (rows[0] ?? []).map((h) => h.trim())
+  importHeaderOk.value = IMPORT_COLUMNS.every((c) => header.includes(c))
+  buildImportPreview(rows, lines)
+}
+
+function downloadCsvTemplate() {
+  // BOM 是刻意的：Excel 双击打开无 BOM 的 UTF-8 CSV 会把中文表头显示成乱码，
+  // 而这份台账恰恰就在 Excel 里编辑；后端 csvStripBom 会把这三个字节剥掉。
+  const csv = `\uFEFF${IMPORT_COLUMNS.join(',')}\r\n${IMPORT_TEMPLATE_EXAMPLE.join(',')}\r\n`
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = '员工花名册导入模板.csv'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+async function submitImport() {
+  if (!importCsvText.value) {
+    ElMessage.warning('请先选择 CSV 文件')
+    return
+  }
+  importLoading.value = true
+  try {
+    const res = await importEmployeesApi({ csv: importCsvText.value, dryRun: importDryRun.value })
+    importResult.value = res
+    if (res.failedCount > 0) {
+      ElMessage.warning(`校验未通过 ${res.failedCount} 条，整批${res.dryRun ? '仅为预检' : '未写入数据库'}`)
+    } else if (res.dryRun) {
+      ElMessage.success(`预检通过：${res.total} 行可导入`)
+    } else {
+      ElMessage.success(`导入完成：新增 ${res.imported} 名员工，登录账号已按工号开通`)
+      await loadList()
+    }
+  } finally {
+    importLoading.value = false
+  }
 }
 
 onMounted(() => {

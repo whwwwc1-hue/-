@@ -58,6 +58,31 @@ export const updateEmployeeApi = (id: number, data: any) => request.put<unknown,
 export const transferEmployeeApi = (id: number, data: any) => request.post<unknown, null>(`/employees/${id}/transfer`, data)
 export const resignEmployeeApi = (id: number, data: any) => request.post<unknown, null>(`/employees/${id}/resign`, data)
 
+/* 批量导入（P2.1 后端 / P2.2 前端）—— 字段名逐字对齐
+ * backend-cangjie/src/controller/employee_controller.cj：
+ *   importFailJson(row, field, reason) → { row, field, reason }
+ *   importResultJson(...)              → { total, successCount, failedCount, imported, dryRun, failed }
+ * body 是 { csv, dryRun }（csv 为纯文本，不是 multipart 上传），故编码兜底必须在前端做。 */
+export interface EmployeeImportFailure {
+  row: number
+  field: string
+  reason: string
+}
+
+export interface EmployeeImportResult {
+  total: number
+  successCount: number
+  failedCount: number
+  imported: number
+  dryRun: boolean
+  failed: EmployeeImportFailure[]
+}
+
+// 后端把整批拼成一条 SQL 交给 mysql.exe 子进程执行，500 行远慢于全局 15s 超时；
+// 单独放宽这一次请求，否则「前端先报请求失败、后端却仍在写库」这种最难查的假故障会出现。
+export const importEmployeesApi = (data: { csv: string; dryRun: boolean }) =>
+  request.post<unknown, EmployeeImportResult>('/employees/import', data, { timeout: 60000 })
+
 export const getTodayAttendanceApi = () => request.get<unknown, any>('/attendance/today')
 export const clockInApi = () => request.post<unknown, any>('/attendance/clock-in', {})
 export const clockOutApi = () => request.post<unknown, any>('/attendance/clock-out', {})
