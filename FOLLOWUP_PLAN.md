@@ -838,9 +838,9 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 | 我：`7b39a1c` 文档（第十三节） | 1 file / 63 insertions |
 | 我：`be92fca` P2.1 后端导入 + 单测 | **4 files / 1403 insertions(+), 3 deletions(-)** |
 | 我：`936e0e4` P2.2 前端导入 + E2E | **5 files / 972 insertions(+), 5 deletions(-)** |
-| 我：P2.3 工资条打印（本次提交） | 代码 **603 行**（4 文件，逐项见 12.12）+ 本文档增量 |
+| 我：`86f7b8f` P2.3 工资条打印 | **4 files / 715 insertions(+), 13 deletions(-)**（代码 **603** 行，其余为本文档增量，逐项见 12.12） |
 | **代码累计（对账口径，排除本文档）** | **44 files / 10466 insertions(+), 91 deletions(-)** |
-| 含文档累计（P2.3 提交**前**暂存区实测） | 45 files / 11219 insertions(+), 147 deletions(-) |
+| 含文档累计（`86f7b8f` 提交后实测） | 45 files / 11220 insertions(+), 147 deletions(-) |
 
 三条口径说明：
 1. **代码累计**的复跑命令：`git diff --shortstat 6e79923 HEAD -- . ":(exclude)FOLLOWUP_PLAN.md"`。
