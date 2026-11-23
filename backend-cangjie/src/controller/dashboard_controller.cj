@@ -20,7 +20,7 @@ public func handleDashboardOverview(ctx: HttpContext): Unit {
             } else {
                 0.0
             }
-            let pendingApprovals = querySingleInt("SELECT COUNT(*) FROM hr_leave_overtime WHERE status = 'PENDING'", 0)
+            let pendingApprovals = querySingleInt("SELECT COUNT(*) FROM hr_leave_overtime WHERE ${reqPendingCountCondition()}", 0)
             let expiringContractsCount = querySingleInt("SELECT COUNT(*) FROM hr_employee WHERE status != 'RESIGNED' AND contract_end_date IS NOT NULL AND contract_end_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)", 0)
 
             let expRows = queryRows("""

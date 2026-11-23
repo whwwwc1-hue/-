@@ -146,6 +146,86 @@ export interface AttRow {
   remark: string
 }
 
+/**
+ * P3.1 长假二级审批状态机 —— request_controller.cj 的 TypeScript 镜像。
+ *
+ * 逐函数对应：reqLongLeaveDays / reqIsPendingLike / reqInitialStatus /
+ * reqCurrentLevel / reqNextStatus / reqCanActStep / reqShouldDeductAnnual。
+ * mock 的价值就在于「同一套判断在两端各写一遍仍然同结论」，因此这里
+ * 不允许出现任何后端没有的额外规则，也不允许省略后端有的分支。
+ */
+const REQ_LONG_LEAVE_DAYS = 3
+const REQ_PENDING_STATUSES = ['PENDING', 'PENDING_MGR', 'PENDING_HR']
+
+function reqIsPendingLike(status: string): boolean {
+  return REQ_PENDING_STATUSES.includes(status)
+}
+
+function reqInitialStatus(category: string, duration: number): string {
+  return category === 'LEAVE' && duration > REQ_LONG_LEAVE_DAYS ? 'PENDING_MGR' : 'PENDING'
+}
+
+function reqCurrentLevel(status: string): number {
+  if (status === 'PENDING' || status === 'PENDING_MGR') return 1
+  if (status === 'PENDING_HR') return 2
+  if (reqIsPendingLike(status)) return 1
+  if (status === 'APPROVED' || status === 'REJECTED' || status === 'CANCELLED') return 0
+  return -1
+}
+
+function reqNextStatus(status: string, action: string): string {
+  if (action === 'REJECTED') return 'REJECTED'
+  if (action !== 'APPROVED') return ''
+  if (status === 'PENDING_MGR') return 'PENDING_HR'
+  return 'APPROVED'
+}
+
+function reqCanActStep(status: string, role: string, sameDept: boolean): boolean {
+  if (!reqIsPendingLike(status)) return false
+  if (role === 'ADMIN') return true
+  if (status === 'PENDING_MGR') return role === 'MANAGER' && sameDept
+  if (status === 'PENDING_HR') return role === 'HR'
+  if (role === 'HR') return true
+  return role === 'MANAGER' && sameDept
+}
+
+function reqActionDeniedMessage(status: string, role: string, sameDept: boolean): string {
+  if (status === 'PENDING_MGR') {
+    if (role === 'MANAGER' && !sameDept) return '长假一级审批仅可由申请本部门主管处理'
+    return '长假一级审批请由部门主管或系统管理员处理'
+  }
+  if (status === 'PENDING_HR') return '长假已进入二级审批，请由人力资源部门或系统管理员处理'
+  return '该申请单已处理，无法重复审批'
+}
+
+function reqShouldDeductAnnual(category: string, subType: string, next: string): boolean {
+  return category === 'LEAVE' && subType === 'ANNUAL' && next === 'APPROVED'
+}
+
+/** 字段名严格等于 hr_approval_log 的列（经 reqTrailJsonFor 后是驼峰出参）。 */
+export interface ApprovalLogRow {
+  requestId: number
+  step: number
+  approverId: number
+  approverName: string
+  approverRole: string
+  action: string
+  resultStatus: string
+  remark: string
+  createdAt: string
+}
+
+/** 审批链出参口径（approvalTrail 数组元素），与 reqTrailJsonFor 拼出的键一致。 */
+interface ApprovalTrailItem {
+  step: number
+  approverName: string
+  approverRole: string
+  action: string
+  resultStatus: string
+  remark: string
+  at: string
+}
+
 /** 字段名严格等于 request_controller.cj 的 requestRowToJson（approverName 取 sys_user.username）。 */
 export interface ReqRow {
   id: number
@@ -165,6 +245,10 @@ export interface ReqRow {
   approveRemark: string
   approvedAt: string
   createdAt: string
+  /** 以下三项由后端按「当前查看者」实时计算，不是 hr_leave_overtime 的列。 */
+  currentLevel: number
+  myAction: string
+  approvalTrail: ApprovalTrailItem[]
 }
 
 /** 字段名严格等于 payroll_controller.cj 的 payrollRowToJson。 */
@@ -270,6 +354,8 @@ export class MockBackend {
   private readonly employees: Employee[]
   private readonly attendance: AttRow[] = []
   private readonly requests: ReqRow[] = []
+  /** P3.1 审批链历史，对应 hr_approval_log；UNIQUE(request_id, step) 由 pushApprovalLog 兜住。 */
+  private readonly approvalLogs: ApprovalLogRow[] = []
   private readonly payrolls: PayRow[] = []
   private readonly performances: PerfRow[] = []
   /** 部门 / 岗位种子逐行取自 sql/init.sql 的 hr_department、hr_position（在职人数不写死，由 employees 现算）。 */
@@ -424,6 +510,23 @@ export class MockBackend {
     return this.requests.find((r) => r.reason === reason)
   }
 
+  /** 供测试断言「一级通过不扣、二级通过才扣」：返回该单据已落账的审批链步数。 */
+  approvalSteps(reason: string): number {
+    const row = this.findRequestByReason(reason)
+    if (!row) return 0
+    return this.approvalLogs.filter((l) => l.requestId === row.id).length
+  }
+
+  /** 该单据审批链的 (step, action, resultStatus) 序列，便于整链 pin。 */
+  approvalChain(reason: string): Array<{ step: number; approverName: string; action: string; resultStatus: string }> {
+    const row = this.findRequestByReason(reason)
+    if (!row) return []
+    return this.approvalLogs
+      .filter((l) => l.requestId === row.id)
+      .sort((a, b) => a.step - b.step)
+      .map((l) => ({ step: l.step, approverName: l.approverName, action: l.action, resultStatus: l.resultStatus }))
+  }
+
   payrollRow(employeeId: number, payMonth: string): PayRow | undefined {
     return this.payrolls.find((p) => p.employeeId === employeeId && p.payMonth === payMonth)
   }
@@ -488,10 +591,45 @@ export class MockBackend {
       approverName: partial.approverName ?? '',
       approveRemark: partial.approveRemark ?? '',
       approvedAt: partial.approvedAt ?? '',
-      createdAt: partial.createdAt ?? nowStamp()
+      createdAt: partial.createdAt ?? nowStamp(),
+      // 与后端一致：这三项是「按查看者现算」的出参，落库前的占位值无意义
+      currentLevel: reqCurrentLevel(partial.status),
+      myAction: '',
+      approvalTrail: []
     }
     this.requests.push(row)
     return row
+  }
+
+  /** 取某单据的审批链出参（对应 reqTrailJsonFor，按 step 升序）。 */
+  private trailOf(reqId: number): ApprovalTrailItem[] {
+    return this.approvalLogs
+      .filter((l) => l.requestId === reqId)
+      .sort((a, b) => a.step - b.step)
+      .map((l) => ({
+        step: l.step,
+        approverName: l.approverName,
+        approverRole: l.approverRole,
+        action: l.action,
+        resultStatus: l.resultStatus,
+        remark: l.remark,
+        at: l.createdAt
+      }))
+  }
+
+  /**
+   * 按当前查看者补出 currentLevel / myAction / approvalTrail 三键。
+   *
+   * 后端 handleRequestList 里 MANAGER 已被 SQL 限定为本部门，所以 sameDept 传 true；
+   * handleRequestMy 则恒不给 myAction（本人不能审自己的单）。
+   */
+  private decorateRequest(row: ReqRow, account: Account, allowAct: boolean): ReqRow {
+    return {
+      ...row,
+      currentLevel: reqCurrentLevel(row.status),
+      myAction: allowAct && reqCanActStep(row.status, account.role, true) ? 'APPROVE' : '',
+      approvalTrail: this.trailOf(row.id)
+    }
   }
 
   private pushAttendance(partial: { employeeId: number; workDate: string; clockInTime: string; clockOutTime: string; lateMinutes: number; status: string; earlyMinutes?: number; remark?: string }): AttRow {
@@ -1020,7 +1158,7 @@ export class MockBackend {
         monthlyResigns: 0,
         todayClockedIn: clockedIn,
         todayAttendanceRate: active.length ? round2((clockedIn / active.length) * 100) : 0,
-        pendingApprovals: this.requests.filter((r) => r.status === 'PENDING').length,
+        pendingApprovals: this.requests.filter((r) => reqIsPendingLike(r.status)).length,
         expiringContractsCount: expiring.length
       },
       expiringContracts: expiring,
@@ -1289,16 +1427,27 @@ export class MockBackend {
     if (category === 'LEAVE' && subType === 'ANNUAL' && emp.annualLeaveBalance < duration) {
       return err(400, `剩余年假天数不足（当前剩余 ${emp.annualLeaveBalance.toFixed(2)} 天）`)
     }
-    const row = this.pushRequest({ employeeId: empId, category, subType, startTime, endTime, duration, reason, status: 'PENDING' })
-    return ok({ id: row.id, status: 'PENDING' })
+    const row = this.pushRequest({
+      employeeId: empId,
+      category,
+      subType,
+      startTime,
+      endTime,
+      duration,
+      reason,
+      status: reqInitialStatus(category, duration)
+    })
+    return ok({ id: row.id, status: row.status, currentLevel: reqCurrentLevel(row.status) })
   }
 
   private onMyRequests(call: Call): Reply {
-    const empId = (call.account as Account).employeeId
+    const account = call.account as Account
+    const empId = account.employeeId
     const category = (call.query.get('category') || '').trim()
     let rows = this.requests.filter((r) => r.employeeId === empId)
     if (category) rows = rows.filter((r) => r.category === category)
-    return ok([...rows].sort((a, b) => b.id - a.id))
+    // 本人不能审自己的单：allowAct 恒 false，与后端 handleRequestMy 传空 myAction 一致
+    return ok([...rows].sort((a, b) => b.id - a.id).map((r) => this.decorateRequest(r, account, false)))
   }
 
   private onRequestList(call: Call): Reply {
@@ -1315,10 +1464,13 @@ export class MockBackend {
       rows = rows.filter((r) => this.employee(r.employeeId).deptId === myDept)
     }
     if (category) rows = rows.filter((r) => r.category === category)
-    if (status) rows = rows.filter((r) => r.status === status)
+    // 与后端 reqStatusCondition 同口径：传 PENDING 表示「任何一级待处理」
+    if (status === 'PENDING') rows = rows.filter((r) => reqIsPendingLike(r.status))
+    else if (status) rows = rows.filter((r) => r.status === status)
     rows.sort((a, b) => b.id - a.id)
     const total = rows.length
-    return ok(pageData(rows.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize))
+    const list = rows.slice((page - 1) * pageSize, page * pageSize).map((r) => this.decorateRequest(r, account, true))
+    return ok(pageData(list, total, page, pageSize))
   }
 
   private onCancelRequest(call: Call, reqId: number): Reply {
@@ -1326,7 +1478,7 @@ export class MockBackend {
     const row = this.requests.find((r) => r.id === reqId)
     if (!row) return err(404, '申请单不存在')
     if (row.employeeId !== account.employeeId && account.role !== 'ADMIN') return err(403, '只能撤回本人提交的申请')
-    if (row.status !== 'PENDING') return err(400, '仅待审批状态可以撤回')
+    if (!reqIsPendingLike(row.status)) return err(400, '仅待审批状态（含长假一级/二级）可以撤回')
     row.status = 'CANCELLED'
     return ok(null)
   }
@@ -1335,29 +1487,52 @@ export class MockBackend {
     const account = call.account as Account
     const row = this.requests.find((r) => r.id === reqId)
     if (!row) return err(404, '审批单不存在')
-    if (account.role === 'MANAGER' && this.employee(row.employeeId).deptId !== this.employee(account.employeeId).deptId) {
-      return err(403, '部门主管仅可审批本部门申请')
-    }
-    if (row.status !== 'PENDING') return err(400, '该申请单已处理，无法重复审批')
+    const sameDept = this.employee(row.employeeId).deptId === this.employee(account.employeeId).deptId
+    if (account.role === 'MANAGER' && !sameDept) return err(403, '部门主管仅可审批本部门申请')
+    if (!reqIsPendingLike(row.status)) return err(400, '该申请单已处理，无法重复审批')
 
     let action = String(call.body.action ?? '').trim()
     if (!action) action = String(call.body.status ?? '').trim()
     if (action !== 'APPROVED' && action !== 'REJECTED') return err(400, '审批动作必须为 APPROVED 或 REJECTED')
+    if (!reqCanActStep(row.status, account.role, sameDept)) {
+      return err(403, reqActionDeniedMessage(row.status, account.role, sameDept))
+    }
 
     const remark = String(call.body.approveRemark ?? '').trim()
+    const next = reqNextStatus(row.status, action)
     const emp = this.employee(row.employeeId)
-    if (action === 'APPROVED' && row.category === 'LEAVE' && row.subType === 'ANNUAL') {
+    // 年假只在终态通过时扣一次：长假一级通过（PENDING_HR）绝不扣减
+    if (reqShouldDeductAnnual(row.category, row.subType, next)) {
       if (emp.annualLeaveBalance < row.duration) {
         return err(400, `员工剩余年假不足（当前 ${emp.annualLeaveBalance.toFixed(2)} 天），无法审批通过`)
       }
       emp.annualLeaveBalance = round2(emp.annualLeaveBalance - row.duration)
     }
-    row.status = action
+    // 步数必须在状态被改写之前取，否则二级会记成 step=0
+    const step = reqCurrentLevel(row.status)
+    row.status = next
     row.approverId = account.userId
     row.approverName = account.username
     row.approveRemark = remark
     row.approvedAt = nowStamp()
-    return ok({ id: row.id, status: action })
+    this.approvalLogs.push({
+      requestId: row.id,
+      step,
+      approverId: account.userId,
+      approverName: account.username,
+      approverRole: account.role,
+      action,
+      resultStatus: next,
+      remark,
+      createdAt: nowStamp()
+    })
+    return ok({
+      id: row.id,
+      status: next,
+      action,
+      currentLevel: step,
+      nextLevel: reqCurrentLevel(next)
+    })
   }
 
   /* -------------------------------------------------------------- 薪酬 */

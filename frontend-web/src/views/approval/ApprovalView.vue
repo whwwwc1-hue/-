@@ -38,7 +38,7 @@
           <el-table-column label="操作" width="100" fixed="right">
             <template #default="{ row }">
               <el-button
-                v-if="row.status === 'PENDING'"
+                v-if="isPendingLike(row.status)"
                 link
                 type="danger"
                 size="small"
@@ -63,6 +63,8 @@
             <el-option label="已通过" value="APPROVED" />
             <el-option label="已驳回" value="REJECTED" />
             <el-option label="已撤回" value="CANCELLED" />
+            <el-option label="待主管审批" value="PENDING_MGR" />
+            <el-option label="待HR审批" value="PENDING_HR" />
           </el-select>
           <el-button type="primary" plain icon="Search" @click="searchAll">刷新</el-button>
         </div>
@@ -92,13 +94,28 @@
               <el-tag :type="reqTagType(row.status)" size="small">{{ reqStatusLabel(row.status) }}</el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="审批级次" width="92">
+            <template #default="{ row }">
+              <span class="text-xs">{{ levelText(row) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="审批链" min-width="200">
+            <template #default="{ row }">
+              <div v-if="!row.approvalTrail || row.approvalTrail.length === 0" class="text-xs text-slate-400">
+                暂无审批记录
+              </div>
+              <div v-for="(t, i) in row.approvalTrail || []" :key="i" class="text-xs leading-5">
+                {{ i + 1 }}. {{ t.approverName }}（{{ roleLabel(t.approverRole) }}）{{ t.action === 'REJECTED' ? '驳回' : '通过' }}<span v-if="t.remark">：{{ t.remark }}</span>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column label="审批操作" width="145" fixed="right">
             <template #default="{ row }">
-              <template v-if="row.status === 'PENDING'">
+              <template v-if="row.myAction === 'APPROVE'">
                 <el-button link type="success" size="small" @click="openApproveDialog(row, 'APPROVED')">通过</el-button>
                 <el-button link type="danger" size="small" @click="openApproveDialog(row, 'REJECTED')">驳回</el-button>
               </template>
-              <span v-else class="text-xs text-slate-400">{{ row.approverName || '已处理' }}</span>
+              <span v-else class="text-xs text-slate-400">{{ row.approverName || fallbackActionText(row) }}</span>
             </template>
           </el-table-column>
         </el-table>
@@ -158,6 +175,14 @@
         <el-form-item :label="createForm.category === 'LEAVE' ? '请假天数' : '加班小时'" required>
           <el-input-number v-model="createForm.duration" :min="0.5" :step="0.5" :max="365" />
         </el-form-item>
+        <el-form-item v-if="isLongLeave" label="审批流程">
+          <el-alert
+            type="warning"
+            :closable="false"
+            show-icon
+            title="请假超过 3 天将走两级审批：先由部门主管审批，再通过人力资源复核，年假余额仅在终态通过时扣减。"
+          />
+        </el-form-item>
         <el-form-item label="申请事由" required>
           <el-input v-model="createForm.reason" type="textarea" :rows="3" placeholder="请简述请假或加班事由" />
         </el-form-item>
@@ -177,6 +202,7 @@
     >
       <el-form :model="approveForm" label-width="86px">
         <el-form-item label="申请人">{{ approveForm.empName }}</el-form-item>
+        <el-form-item label="当前级次">第 {{ approveForm.currentLevel }} 级审批</el-form-item>
         <el-form-item label="审批意见">
           <el-input v-model="approveForm.approveRemark" type="textarea" :rows="3" placeholder="填写审批意见或驳回原因" />
         </el-form-item>
@@ -235,7 +261,8 @@ const approveForm = reactive({
   id: 0,
   empName: '',
   action: 'APPROVED',
-  approveRemark: ''
+  approveRemark: '',
+  currentLevel: 1
 })
 
 function subTypeLabel(s: string) {
@@ -254,11 +281,51 @@ function subTypeLabel(s: string) {
 function reqStatusLabel(s: string) {
   const m: Record<string, string> = {
     PENDING: '待审批',
+    PENDING_MGR: '待主管审批',
+    PENDING_HR: '待HR审批',
     APPROVED: '已通过',
     REJECTED: '已驳回',
     CANCELLED: '已撤回'
   }
   return m[s] || s
+}
+
+// P3.1：长假未终态有三档，撤回入口必须与后端 reqIsPendingLike 同口径
+const PENDING_LIKE = ['PENDING', 'PENDING_MGR', 'PENDING_HR']
+// 与后端 reqLongLeaveDays 一致：仅 LEAVE 且天数严格大于该阈值才走两级
+const LONG_LEAVE_DAYS = 3
+
+const isLongLeave = computed(
+  () => createForm.category === 'LEAVE' && Number(createForm.duration) > LONG_LEAVE_DAYS
+)
+
+function isPendingLike(s: string) {
+  return PENDING_LIKE.includes(s)
+}
+
+function roleLabel(r: string) {
+  const m: Record<string, string> = {
+    ADMIN: '系统管理员',
+    HR: '人力资源',
+    MANAGER: '部门主管',
+    EMPLOYEE: '员工'
+  }
+  return m[r] || r
+}
+
+function levelText(row: any) {
+  if (row.status === 'APPROVED' || row.status === 'REJECTED' || row.status === 'CANCELLED') {
+    return '已终态'
+  }
+  return row.currentLevel === 2 ? '第二级 / HR' : '第一级'
+}
+
+// 无操作权限时给出的兜底说明，避免整列空白让人误以为接口出错
+function fallbackActionText(row: any) {
+  if (row.status === 'PENDING_MGR') return '待部门主管处理'
+  if (row.status === 'PENDING_HR') return '待人力资源处理'
+  if (row.status === 'PENDING') return '待处理'
+  return '——'
 }
 
 function reqTagType(s: string): 'warning' | 'success' | 'danger' | 'info' {
@@ -321,7 +388,7 @@ async function submitCreate() {
   }
   submitLoading.value = true
   try {
-    await createRequestApi({
+    const res: any = await createRequestApi({
       category: createForm.category,
       subType: createForm.subType,
       startTime: createForm.startTime,
@@ -329,7 +396,12 @@ async function submitCreate() {
       duration: createForm.duration,
       reason: createForm.reason.trim()
     })
-    ElMessage.success('申请已提交')
+    // 长假进入双级链，提示语必须与后端返回的初始状态一致
+    if (res?.status === 'PENDING_MGR') {
+      ElMessage.success('申请已提交，超过 3 天的长假需主管与人力资源两级审批')
+    } else {
+      ElMessage.success('申请已提交')
+    }
     createDialogVisible.value = false
     await loadMyRequests()
     if (canApprove.value) loadAllRequests()
@@ -351,6 +423,7 @@ function openApproveDialog(row: any, action: 'APPROVED' | 'REJECTED') {
   approveForm.empName = row.empName
   approveForm.action = action
   approveForm.approveRemark = action === 'APPROVED' ? '同意' : ''
+  approveForm.currentLevel = row.currentLevel || 1
   approveDialogVisible.value = true
 }
 
@@ -360,11 +433,18 @@ async function submitApprove() {
   }
   submitLoading.value = true
   try {
-    await approveRequestApi(approveForm.id, {
+    const res: any = await approveRequestApi(approveForm.id, {
       action: approveForm.action,
       approveRemark: approveForm.approveRemark.trim()
     })
-    ElMessage.success(approveForm.action === 'APPROVED' ? '审批已通过' : '已驳回该申请')
+    if (approveForm.action === 'REJECTED') {
+      ElMessage.success('已驳回该申请')
+    } else if (res?.status === 'PENDING_HR') {
+      // 长假一级通过只是把单据推给 HR，此刻既未生效也不扣年假，提示必须区分开
+      ElMessage.success('一级审批通过，已转人力资源复核')
+    } else {
+      ElMessage.success('审批已通过')
+    }
     approveDialogVisible.value = false
     await auth.refreshProfile()
     await loadAllRequests()

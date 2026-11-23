@@ -58,6 +58,33 @@ function trackApi(page: Page): string[] {
   return calls
 }
 
+/**
+ * 用当前页面已登录身份直连接口。
+ *
+ * 存在的理由：越级/重复审批这类分支，UI 已经把按钮藏掉了（myAction !== 'APPROVE'），
+ * 光点界面永远测不到服务端的 403。真正的防线必须在接口上，所以这里绕过按钮直接 POST，
+ * 断言「界面挡住 + 服务端也挡住」两件事同时成立。
+ */
+async function apiPost(
+  page: Page,
+  path: string,
+  body: unknown
+): Promise<{ status: number; code: number; message: string }> {
+  return page.evaluate(
+    async ([p, b]) => {
+      const token = localStorage.getItem('hrms_token') ?? ''
+      const res = await fetch(`/api/v1${p}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(b),
+      })
+      const json = await res.json()
+      return { status: res.status, code: json.code, message: json.message }
+    },
+    [path, body] as [string, unknown]
+  )
+}
+
 test.describe('建单表单', () => {
   test('事由为空时提交：前端拦截、不关窗、零请求', async ({ page }) => {
     await signIn(page, 'emp01', '/approval')
@@ -233,8 +260,29 @@ test.describe('审批闭环', () => {
     await mgr.getByRole('tab', { name: '审批工作台' }).click()
     await rowByReason(mgr, 'pane-approve', reason).getByRole('button', { name: '通过' }).click()
     const firstApprove = mgr.locator('.el-dialog').filter({ hasText: '确认审批通过' })
+    await expect(firstApprove.getByText('第 1 级审批')).toBeVisible()
     await firstApprove.getByRole('button', { name: '同意通过' }).click()
-    await expect(toast(mgr, '审批已通过')).toBeVisible()
+    // 5 天 > 3 天 = 长假：一级通过只把单据推给 HR，此刻既不生效也不扣年假
+    await expect(toast(mgr, '一级审批通过，已转人力资源复核')).toBeVisible()
+    expect(mock.findRequestByReason(reason)?.status).toBe('PENDING_HR')
+    expect(mock.leaveBalance('emp01')).toBe(5)
+    expect(mock.approvalSteps(reason)).toBe(1)
+
+    const hr = await openRole('hr', '/approval')
+    await hr.getByRole('tab', { name: '审批工作台' }).click()
+    const hrRow = rowByReason(hr, 'pane-approve', reason)
+    await expect(hrRow).toContainText('待HR审批')
+    await hrRow.getByRole('button', { name: '通过' }).click()
+    const secondLevel = hr.locator('.el-dialog').filter({ hasText: '确认审批通过' })
+    await expect(secondLevel.getByText('第 2 级审批')).toBeVisible()
+    await secondLevel.getByRole('button', { name: '同意通过' }).click()
+    await expect(toast(hr, '审批已通过')).toBeVisible()
+    expect(mock.findRequestByReason(reason)?.status).toBe('APPROVED')
+    // 整条链两级两人，且只有二级那一步落到 APPROVED —— 这正是「不重复扣减」的证据
+    expect(mock.approvalChain(reason).map((l) => [l.step, l.approverName, l.resultStatus])).toEqual([
+      [1, 'manager', 'PENDING_HR'],
+      [2, 'hr', 'APPROVED'],
+    ])
     expect(mock.leaveBalance('emp01')).toBe(0)
 
     await page.reload()
@@ -260,6 +308,202 @@ test.describe('审批闭环', () => {
     await secondApprove.getByRole('button', { name: '取消' }).click()
     expect(mock.findRequestByReason('年假出行')?.status).toBe('PENDING')
     expect(mock.leaveBalance('emp01')).toBe(0)
+  })
+})
+
+test.describe('长假二级审批（P3.1）', () => {
+  /**
+   * 刷新审批工作台。
+   *
+   * 跨角色用例里「别人已经推进了状态」是常态，而列表数据只在 mount / 翻页 / 点刷新时重取；
+   * 这里刻意不用 page.reload()：activeTab 是组件内 ref，刷新后会退回「我的申请记录」，
+   * 反而要再点一次 tab，不如直接点工具栏的刷新按钮。
+   */
+  async function refreshWorkbench(page: Page): Promise<void> {
+    await page.locator('#pane-approve').getByRole('button', { name: '刷新' }).click()
+    await expect(page.locator('#pane-approve .el-table__row').first()).toBeVisible()
+  }
+
+  /** 建一张 N 天的年假单，返回时单据已落库；toastContains 用来钉住提示语的分级。 */
+  async function createAnnualLeave(page: Page, reason: string, days: number, toastContains = '申请已提交'): Promise<void> {
+    const dialog = await openCreateDialog(page)
+    await dialog.getByPlaceholder('请简述请假或加班事由').fill(reason)
+    const durationInput = dialog.locator('.el-input-number input')
+    await durationInput.fill(String(days))
+    await durationInput.press('Enter')
+    await expect(durationInput).toHaveValue(String(days))
+    await dialog.getByRole('button', { name: '提交审批' }).click()
+    // 连续建两张单时上一条 toast 还没到期（3 秒自动销毁），必须取最后一条，
+    // 否则两条都含「申请已提交」，strict mode 会命中 2 个元素
+    await expect(toast(page, toastContains).last()).toBeVisible()
+    await expect(dialog).toBeHidden()
+  }
+
+  test('4 天年假必须两级签完才扣年假；HR 不能代签一级；审批链完整回显', async ({ page, mock, openRole }) => {
+    test.skip(REAL_BACKEND, '断言依赖 mock 内部余额与审批链步数')
+    const reason = 'E2E 长假两级'
+
+    await signIn(page, 'emp01', '/approval')
+    await expect(balanceValue(page)).toHaveText('5')
+
+    // 建单前先确认「>3 天走两级」的提示只在长假出现（这是用户看得见的规则）
+    const dialog = await openCreateDialog(page)
+    await dialog.getByPlaceholder('请简述请假或加班事由').fill('临时探路')
+    const daysInput = dialog.locator('.el-input-number input')
+    await daysInput.fill('4')
+    await daysInput.press('Enter')
+    await expect(dialog.getByText('请假超过 3 天将走两级审批')).toBeVisible()
+    await dialog.getByRole('button', { name: '取消' }).click()
+
+    await createAnnualLeave(page, reason, 4)
+    // 长假单初始就落在一级，而不是历史的 PENDING
+    expect(mock.findRequestByReason(reason)?.status).toBe('PENDING_MGR')
+    expect(mock.approvalSteps(reason)).toBe(0)
+    expect(mock.leaveBalance('emp01')).toBe(5)
+    await expect(rowByReason(page, 'pane-my', reason)).toContainText('待主管审批')
+
+    // HR 看得到这张单（未终态都在默认视图里），但一级不许代签
+    const hr = await openRole('hr', '/approval')
+    await hr.getByRole('tab', { name: '审批工作台' }).click()
+    const hrRow = rowByReason(hr, 'pane-approve', reason)
+    await expect(hrRow.getByRole('button', { name: '通过' })).toHaveCount(0)
+    await expect(hrRow).toContainText('待部门主管处理')
+
+    // 一级：主管通过 → 只推进到 PENDING_HR，余额一分不动
+    const mgr = await openRole('manager', '/approval')
+    await mgr.getByRole('tab', { name: '审批工作台' }).click()
+    const mgrRow = rowByReason(mgr, 'pane-approve', reason)
+    await expect(mgrRow).toContainText('第一级')
+    await mgrRow.getByRole('button', { name: '通过' }).click()
+    const firstDialog = mgr.locator('.el-dialog').filter({ hasText: '确认审批通过' })
+    await expect(firstDialog.getByText('第 1 级审批')).toBeVisible()
+    await firstDialog.getByRole('button', { name: '同意通过' }).click()
+    await expect(toast(mgr, '一级审批通过，已转人力资源复核')).toBeVisible()
+    expect(mock.findRequestByReason(reason)?.status).toBe('PENDING_HR')
+    expect(mock.approvalSteps(reason)).toBe(1)
+    expect(mock.leaveBalance('emp01')).toBe(5)
+
+    // 一级签完后主管侧再也拿不到按钮（链不可跳过）
+    await expect(rowByReason(mgr, 'pane-approve', reason).getByRole('button', { name: '通过' })).toHaveCount(0)
+
+    // 二级：HR 通过 → APPROVED，年假此刻一次性扣 4 天
+    await refreshWorkbench(hr)
+    const hrSecond = rowByReason(hr, 'pane-approve', reason)
+    await expect(hrSecond).toContainText('待HR审批')
+    await expect(hrSecond).toContainText('第二级 / HR')
+    await hrSecond.getByRole('button', { name: '通过' }).click()
+    const secondDialog = hr.locator('.el-dialog').filter({ hasText: '确认审批通过' })
+    await expect(secondDialog.getByText('第 2 级审批')).toBeVisible()
+    await secondDialog.getByRole('button', { name: '同意通过' }).click()
+    await expect(toast(hr, '审批已通过')).toBeVisible()
+
+    expect(mock.findRequestByReason(reason)?.status).toBe('APPROVED')
+    expect(mock.leaveBalance('emp01')).toBe(1)
+    expect(mock.approvalChain(reason).map((l) => [l.step, l.approverName, l.resultStatus])).toEqual([
+      [1, 'manager', 'PENDING_HR'],
+      [2, 'hr', 'APPROVED'],
+    ])
+
+    // 审批链两行都要在表格里看得见（谁在第几级、通过还是驳回）
+    await pickOption(hr, hr.locator('#pane-approve'), 1, '已通过')
+    const doneRow = rowByReason(hr, 'pane-approve', reason)
+    await expect(doneRow).toContainText('1. manager（部门主管）通过')
+    await expect(doneRow).toContainText('2. hr（人力资源）通过')
+    await expect(doneRow).toContainText('已终态')
+  })
+
+  test('越级与重复审批：接口层返回 403，既不扣第二次也改不动状态', async ({ page, mock, openRole }) => {
+    test.skip(REAL_BACKEND, '断言依赖 mock 内部余额与审批链步数')
+    const reason = 'E2E 长假越级'
+
+    await signIn(page, 'emp01', '/approval')
+    await createAnnualLeave(page, reason, 4)
+    const reqId = mock.findRequestByReason(reason)!.id
+
+    // 一级期间 HR 直接调接口：必须 403，链一步都不许写
+    const hr = await openRole('hr', '/approval')
+    const early = await apiPost(hr, `/requests/${reqId}/approve`, { action: 'APPROVED', approveRemark: '代签一级' })
+    expect(early.status).toBe(403)
+    expect(early.message).toBe('长假一级审批请由部门主管或系统管理员处理')
+    expect(mock.findRequestByReason(reason)?.status).toBe('PENDING_MGR')
+    expect(mock.approvalSteps(reason)).toBe(0)
+    expect(mock.leaveBalance('emp01')).toBe(5)
+
+    const mgr = await openRole('manager', '/approval')
+    await mgr.getByRole('tab', { name: '审批工作台' }).click()
+    await rowByReason(mgr, 'pane-approve', reason).getByRole('button', { name: '通过' }).click()
+    await mgr
+      .locator('.el-dialog')
+      .filter({ hasText: '确认审批通过' })
+      .getByRole('button', { name: '同意通过' })
+      .click()
+    expect(mock.findRequestByReason(reason)?.status).toBe('PENDING_HR')
+    expect(mock.leaveBalance('emp01')).toBe(5)
+
+    // 主管想再签一次（等于跳过 HR 直接终态）：必须 403，且余额与链都不许动
+    const again = await apiPost(mgr, `/requests/${reqId}/approve`, {
+      action: 'APPROVED',
+      approveRemark: '我再签一次',
+    })
+    expect(again.status).toBe(403)
+    expect(again.message).toBe('长假已进入二级审批，请由人力资源部门或系统管理员处理')
+    expect(mock.findRequestByReason(reason)?.status).toBe('PENDING_HR')
+    expect(mock.approvalSteps(reason)).toBe(1)
+    expect(mock.leaveBalance('emp01')).toBe(5)
+
+    // 等二级真正通过后，才对这张单扣一次年假
+    await hr.getByRole('tab', { name: '审批工作台' }).click()
+    await refreshWorkbench(hr)
+    await rowByReason(hr, 'pane-approve', reason).getByRole('button', { name: '通过' }).click()
+    await hr
+      .locator('.el-dialog')
+      .filter({ hasText: '确认审批通过' })
+      .getByRole('button', { name: '同意通过' })
+      .click()
+    expect(mock.findRequestByReason(reason)?.status).toBe('APPROVED')
+    expect(mock.leaveBalance('emp01')).toBe(1)
+
+    // 终态再点一次：400「已处理」，绝不能出现第三次扣减
+    const after = await apiPost(hr, `/requests/${reqId}/approve`, { action: 'APPROVED', approveRemark: '重复' })
+    expect(after.status).toBe(400)
+    expect(after.message).toBe('该申请单已处理，无法重复审批')
+    expect(mock.approvalSteps(reason)).toBe(2)
+    expect(mock.leaveBalance('emp01')).toBe(1)
+  })
+
+  test('长假在一级也能撤回；3 天以内仍是单级', async ({ page, mock, openRole }) => {
+    test.skip(REAL_BACKEND, '断言依赖 mock 内部状态')
+    const long = 'E2E 长假撤回'
+    const short = 'E2E 三天单级'
+
+    await signIn(page, 'emp01', '/approval')
+    await createAnnualLeave(page, long, 4, '超过 3 天的长假需主管与人力资源两级审批')
+    await createAnnualLeave(page, short, 3)
+    // 阈值是严格「大于」：正好 3 天仍是老的单级 PENDING，也不该出现两级提示
+    expect(mock.findRequestByReason(short)?.status).toBe('PENDING')
+    expect(mock.findRequestByReason(long)?.status).toBe('PENDING_MGR')
+
+    const longRow = rowByReason(page, 'pane-my', long)
+    await expect(longRow.getByRole('button', { name: '撤回' })).toHaveCount(1)
+    await longRow.getByRole('button', { name: '撤回' }).click()
+    await confirmBox(page, '撤回确认').getByRole('button', { name: '确定' }).click()
+    await expect(toast(page, '已撤回申请')).toBeVisible()
+    expect(mock.findRequestByReason(long)?.status).toBe('CANCELLED')
+    expect(mock.leaveBalance('emp01')).toBe(5)
+
+    // 单级那张照旧由主管一步签完，不产生二级
+    const mgr = await openRole('manager', '/approval')
+    await mgr.getByRole('tab', { name: '审批工作台' }).click()
+    await rowByReason(mgr, 'pane-approve', short).getByRole('button', { name: '通过' }).click()
+    await mgr
+      .locator('.el-dialog')
+      .filter({ hasText: '确认审批通过' })
+      .getByRole('button', { name: '同意通过' })
+      .click()
+    await expect(toast(mgr, '审批已通过')).toBeVisible()
+    expect(mock.findRequestByReason(short)?.status).toBe('APPROVED')
+    expect(mock.approvalSteps(short)).toBe(1)
+    expect(mock.leaveBalance('emp01')).toBe(2)
   })
 })
 

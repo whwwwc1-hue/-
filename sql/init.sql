@@ -112,10 +112,10 @@ CREATE TABLE IF NOT EXISTS hr_leave_overtime (
     end_time DATETIME NOT NULL COMMENT '结束时间',
     duration DECIMAL(5, 1) NOT NULL COMMENT '时长（请假为天，加班为小时）',
     reason VARCHAR(500) NOT NULL COMMENT '事由',
-    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/APPROVED/REJECTED/CANCELLED',
-    approver_id BIGINT DEFAULT NULL COMMENT '审批人用户ID',
-    approve_remark VARCHAR(255) DEFAULT NULL COMMENT '审批意见',
-    approved_at DATETIME DEFAULT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING(单级待审批)/PENDING_MGR(长假一级待主管审批)/PENDING_HR(长假二级待HR审批)/APPROVED/REJECTED/CANCELLED；PENDING_MGR 与 PENDING_HR 同属未终态',
+    approver_id BIGINT DEFAULT NULL COMMENT '最近一次处理该单的用户ID',
+    approve_remark VARCHAR(255) DEFAULT NULL COMMENT '最近一次审批意见',
+    approved_at DATETIME DEFAULT NULL COMMENT '进入终态(APPROVED/REJECTED)的时间；中间态记录最近一次推进时间',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_lo_emp_status (employee_id, status),
     INDEX idx_lo_category (category)
@@ -188,6 +188,24 @@ CREATE TABLE IF NOT EXISTS sys_audit_log (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_audit_time (created_at)
 ) ENGINE=InnoDB COMMENT='操作审计日志表';
+
+-- 12. 审批链历史表（P3.1 长假二级审批）
+-- 一条申请单对应 1~2 行：step=1 主管（或单级审批人）、step=2 HR 二级。
+-- UNIQUE(request_id, step) 保证「同一步骤不可重复推进」，是并发双击审批的最后一道防线。
+CREATE TABLE IF NOT EXISTS hr_approval_log (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    request_id BIGINT NOT NULL COMMENT '申请单ID(hr_leave_overtime.id)',
+    step INT NOT NULL COMMENT '审批级次：1=一级(主管/单级)，2=二级(HR)',
+    approver_id BIGINT NOT NULL COMMENT '处理人用户ID',
+    approver_name VARCHAR(64) NOT NULL COMMENT '处理人登录名快照',
+    approver_role VARCHAR(20) NOT NULL COMMENT '处理人角色快照(MANAGER/HR/ADMIN)',
+    action VARCHAR(20) NOT NULL COMMENT 'APPROVED/REJECTED',
+    result_status VARCHAR(20) NOT NULL COMMENT '本次动作后的单据状态',
+    remark VARCHAR(255) DEFAULT NULL COMMENT '本级审批意见',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_al_request_step (request_id, step),
+    INDEX idx_al_request (request_id)
+) ENGINE=InnoDB COMMENT='审批链历史表';
 
 -- ==========================================
 -- 初始演示数据（Seed Data）

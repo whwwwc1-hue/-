@@ -101,6 +101,8 @@
 ## 三、任务包 P1：测试与 CI（对应指南工作包 A）
 
 - [x] **P1.1 后端纯函数单测**（`cjpm test`，仓颉 `@Test`）—— **已完成 7 个测试文件 / 188 个 `@TestCase`，清单与期望值见第十二节 12.9**。
+      > **数字已过时（截至 P1.1 收口）**：P2.1 / P2.4 / P3.1 又各加 1 个测试文件，现为 **10 文件 / 275 `@TestCase` / 1610 `@Assert`**，
+      > 逐文件实测表见 **12.14**。下文「188」保留是为了忠实记录当时的收口状态。
       ⚠️ 因本机无 SDK（L-CJ-1），这 188 个用例**从未被真正执行过**；质量靠两条纪律兜底：
       ①新语法必须先 `git grep` 基线同款用法；②数值断言逐条手算，取整未知处一律降级为容差或量尺（12.5）。
       优先只测**不需要数据库**的纯逻辑：
@@ -240,10 +242,65 @@
 
 ## 五、任务包 P3：业务流深化（对应指南工作包 C）
 
-- [ ] **P3.1 长假二级审批**：`hr_leave_overtime.status` 扩展为 `PENDING_MGR → PENDING_HR → APPROVED/REJECTED`；`duration > 3` 天走双级；`MANAGER` 仅能推进一级，`HR` 推进二级；年假仅在**终态通过**时扣减余额（避免重复扣减）；增加审批链历史字段与展示。
+- [x] **P3.1 长假二级审批**：`hr_leave_overtime.status` 扩展为 `PENDING_MGR → PENDING_HR → APPROVED/REJECTED`；`duration > 3` 天走双级；`MANAGER` 仅能推进一级，`HR` 推进二级；年假仅在**终态通过**时扣减余额（避免重复扣减）；增加审批链历史字段与展示。
+      ✅ **已完成，前端经真实浏览器验证；后端 `.cj` 仍未经编译（L-CJ-1）**：`sql/init.sql` 新增表 12 `hr_approval_log`
+      并在真实 `hrms_db` 实跑生效；后端状态机 15 个纯函数 + 33 个 `@TestCase`（`request_controller_test.cj`）；
+      前端 `ApprovalView.vue` 双级改造；`e2e/approval.spec.ts` 由 7 例扩到 **10 例**，全量 **68 passed / 0 failed**，
+      `typecheck`/`eslint --max-warnings 0`/`build` 三连 exit 0。落地要点见下方「P3.1 契约与取证」，新增风险见 L-APR-1 ~ L-APR-3。
+
+**P3.1 契约与取证（已落地；「两级签完才扣年假」是靠状态机单一入口保证的，不是靠调用方自觉）**
+- **状态机全部收敛成纯函数**（`request_controller.cj:11-193`，一律显式 `public`）：`reqInitialStatus` /
+  `reqCurrentLevel` / `reqNextStatus` / `reqCanActStep` / `reqActionDeniedMessage` / `reqShouldDeductAnnual` /
+  `reqIsPendingLike` / `reqStatusCondition` / `reqPendingCountCondition` / `reqTrailSql` / `reqTrailJsonFor` /
+  `reqIdListFromRows` / `reqIsNumericId` / `loadApprovalTrail` / `requestRowToJson`。
+  审批接口不再有任何 `if status == "..."` 的字面量分支散落在 HTTP 处理里。
+- **审批链用独立表而不是加列**：新增 `hr_approval_log`（`UNIQUE KEY uk_al_request_step (request_id, step)`）。
+  给 `hr_leave_overtime` 加 6 列只能记「最后一级」，历史会在二级覆盖一级；独立表天然支持 N 级，
+  且 `UNIQUE(request_id, step)` 是并发重复审批的最后一道防线——所以 `executeSql` 返回 `false` 时**必须报 500**，
+  不能像 P0 之前那样把「唯一键冲突」当成功吞掉。
+- **双级判定只看 `category == "LEAVE" && duration > 3.0`**：加班单的 `duration` 单位是**小时**，
+  与请假共用阈值会把「加班 4 小时」误判成长假。阈值 `reqLongLeaveDays = 3.0` 是**严格大于**，
+  正好 3 天仍是老的 `PENDING` 单级，既有数据与既有 E2E 断言不受影响。
+- **年假只在 `reqNextStatus` 算出的 `nextStatus == "APPROVED"` 时扣一次**，扣减与推进在**同一个 `executeSql` 事务**内
+  （`UPDATE hr_employee` + `UPDATE hr_leave_overtime` + `INSERT INTO hr_approval_log` + `START TRANSACTION/COMMIT`）。
+  「一级通过不扣、二级通过才扣」不是靠判断第几级，而是靠 `PENDING_MGR` 的下一级是 `PENDING_HR` 而非终态——
+  重复调用只会撞 `!reqIsPendingLike` 的 400，结构上不可能扣第二次。
+- **每次调用只推一级**（`ADMIN` 也不允许跳级）：`reqNextStatus("PENDING_MGR","APPROVED") = "PENDING_HR"`，
+  所以主管签完只是把单子交给 HR，链不可跳过。
+- **兼容读法**：`reqStatusCondition("PENDING")` 展开成 `lo.status IN ('PENDING','PENDING_MGR','PENDING_HR')`，
+  老的「待办」查询与 `dashboard_controller.cj:23` 的待办计数（同一口径，见 `reqPendingCountCondition`）
+  不会因为多出两个状态值而漏单。其余模块（`attendance_controller.cj:154/155`、`payroll_controller.cj:81/87`、
+  `performance_controller.cj:83`）只认 `APPROVED` 终态，语义本来就对，**刻意不改**。
+- **出参新增三键**（`currentLevel` / `myAction` / `approvalTrail`）都是「按当前查看者现算」，不是库里的列：
+  `myAction` 让前端**不需要重复实现一遍 RBAC**，后端说能审才渲染按钮；`/requests/my` 恒为空串（本人不能审自己）。
+  审批链用 `IN (...)` **一次批量取回**（`reqTrailSql`），避免每行起一个 `mysql.exe` 子进程——本仓每条 SQL 一个进程，
+  N+1 的代价在这里是线性的、看得见的。
+- **mock 第 28 条分发不变、但 `onApproveRequest` 整体重写为后端镜像**（`mock-server.ts`）：同一套
+  `reqInitialStatus/reqCurrentLevel/reqNextStatus/reqCanActStep/reqShouldDeductAnnual` 用 TS 再写一遍，
+  并新增 `approvalLogs` 数组 + `approvalSteps()` / `approvalChain()` 断言口；`onCancelRequest` 放宽到 pending-like，
+  工作台 `status=PENDING` 过滤同步展开三档。
+
+**P3.1 取证（E2E 三层同时断言，命令与结果见 12.14）**
+- 「4 天年假必须两级签完才扣年假」✅：`长假二级审批（P3.1）` 第 1 例——建单即 `PENDING_MGR` 且 `approvalSteps == 0`、
+  余额 **5 不动**；主管一级通过后 `PENDING_HR`、余额仍 **5**；HR 二级通过才 `APPROVED`、余额 **5 → 1**（一次扣 4 天）；
+  `approvalChain` 整链 pin 为 `[[1,'manager','PENDING_HR'],[2,'hr','APPROVED']]`，表格回显
+  `1. manager（部门主管）通过` / `2. hr（人力资源）通过`。
+- 「HR 不能代签一级 / 链不可跳过」✅：同例断言 HR 侧 `通过` 按钮 `toHaveCount(0)` 且显示「待部门主管处理」；
+  第 2 例用 `apiPost()` **绕过界面直连接口**（UI 已藏掉按钮，服务端 403 只能这样测），钉死四条契约——
+  一级期间 HR `403 长假一级审批请由部门主管或系统管理员处理`、二级期间主管 `403 长假已进入二级审批…`、
+  终态重复审批 `400 该申请单已处理，无法重复审批`，且三种越权之后 `approvalSteps` 与余额**一律不变**。
+- 「阈值是严格大于」✅：第 3 例同一账号连建 4 天与 3 天两张单，分别是 `PENDING_MGR` 与 `PENDING`，
+  3 天单主管一步签完（`approvalSteps == 1`、余额 5 → 2），证明老单级路径没有被双级改造破坏。
+- 「撤回覆盖长假」✅：第 3 例 `PENDING_MGR` 状态下撤回按钮仍在（`isPendingLike` 与后端同口径），
+  确认后落 `CANCELLED` 且余额不动。
+- 「向后兼容」✅：既有 7 例（1 天单级闭环 / 撤回 / 驳回 / 余额边界 / 权限门）**全部原样通过**，
+  其中「恰好扣满」那例因 5 天 > 3 天**必须**改走两级，已按新语义补上 HR 二级步骤而不是放宽断言。
+
 - [ ] **P3.2 站内通知中心**：新增 `sys_notification` 表（`user_id, type, title, content, ref_id, read_flag, created_at`），在「合同 30 天内到期 / 审批结果 / 工资条发放」三处触发写入；`GET /api/v1/notifications`、`PUT /api/v1/notifications/:id/read`、`POST /api/v1/notifications/read-all`；[AppLayout.vue](./frontend-web/src/layout/AppLayout.vue) 顶栏铃铛红点 + 抽屉列表 + 30s 轮询。
 
-**验收**：4 天长假必须两级签完才扣年假；发薪后员工铃铛出现未读消息且点击跳转工资条。
+**验收**（逐项标注兑付状态）：
+- 「4 天长假必须两级签完才扣年假」✅ **已兑付**（P3.1，见上方取证）。
+- 「发薪后员工铃铛出现未读消息且点击跳转工资条」⬜ 属 P3.2，未开工。
 
 ---
 
@@ -357,6 +414,16 @@
 | 2026-11-23 | ★ P2.4 E2E 首跑 6 红 → 全绿（两处假红的根因） | ① `pickMonth` 写成「先 `fill`+`Enter` 再 `waitForRequest`」，Vue 的 `@change` 是微任务，请求早于监听器发出 ⇒ 10s 超时；② `PAYROLL_MONTH` 恰等于真实当前月（2026-11），`el-date-picker` 值未变化，**`@change` 根本不触发** | ✅ ① 一律**先注册 waiter 再触发动作**；② 先比对 `inputValue()`，相同则 early return。证据取自 `test-results/**/error-context.md` 的 aria 快照（combobox 值已是 `2026-11`、卡片已是 5 人 / 1.82%）——**先拿到运行时证据再改断言**，否则极易顺手把断言放松成假绿 |
 | 2026-11-23 | ★ P2.4 两处「测我自己编的数据」的诱惑 | ① 出勤率断言写成 `0.00`，实际表格输出 number `0`；② 想在 payroll 导出用例里断言 toast，但 `exportCsv` 从来没有成功提示 | ✅ ① 改成逐格 `toBe('0')`，以**渲染结果**为准而非叙述语感（同 11.2 教训）；② 去掉 toast 断言，改断言 `download.suggestedFilename()` 与行数 —— 断言不存在的行为比不测更糟 |
 | 2026-11-23 | P2.3 用例首跑纠偏 2 处 | ① `getByRole('button',{name:'关闭'})` strict violation —— EP 叉号的可访问名是「关闭此对话框」，包含匹配命中 2 个；② 断言 `toContainText('发放时间：')` 落空 —— 专版里「发放时间」是表格 `<th>`，**没有冒号**，冒号只存在于抬头那行 `<span>` | ✅ ① 加 `exact: true`；② 改为定位该行的 `<td>` 末格 `toHaveText('—')` / `toHaveText(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)`，断言从「文案存在」升级为「格子内容」。教训同 11.2：**模板里写没写标点，要以模板为准，不能凭叙述语感** |
+| 2026-11-24 | **P3.1 数据库** | `sql/init.sql` 的 `hr_leave_overtime.status` 注释扩为六值并说明「`PENDING_MGR`/`PENDING_HR` 同属未终态」，`approver_id/approve_remark/approved_at` 改注为「最近一次」；新增**表 12 `hr_approval_log`**（`UNIQUE KEY uk_al_request_step (request_id, step)` + `INDEX idx_al_request`） | ✅ 已用 `mysql.exe` 对真实 `hrms_db` 实跑 DDL + `ALTER TABLE ... MODIFY`，`SHOW TABLES LIKE 'hr_approval_log'` 命中、`COUNT(*)=0`。⚠️ 存量库需手工跑 `ALTER`，见 **L-APR-1** |
+| 2026-11-24 | **P3.1 后端** | `request_controller.cj` +239/−28：**把散在 HTTP 处理里的状态判断全部收敛成 15 个纯函数**（`reqInitialStatus`/`reqCurrentLevel`/`reqNextStatus`/`reqCanActStep`/`reqActionDeniedMessage`/`reqShouldDeductAnnual`/`reqIsPendingLike`/`reqStatusCondition`/`reqPendingCountCondition`/`reqTrailSql`/`reqTrailJsonFor`/`reqIdListFromRows`/`reqIsNumericId`/`loadApprovalTrail`/`requestRowToJson`）；建单落 `reqInitialStatus`、审批改为「一次只推一级 + 同事务写审批链 + 终态才扣年假」、列表/我的申请出参补 `currentLevel`/`myAction`/`approvalTrail`、撤回放宽到 pending-like；`dashboard_controller.cj` 待办计数改 `reqPendingCountCondition()` | ⚠️ **未编译**（L-CJ-1）；新增 `request_controller_test.cj` **405 行 / 33 个 `@TestCase` / 100 个 `@Assert`**做静态论证，并用 node 逐函数复算对齐期望值 |
+| 2026-11-24 | ★ P3.1 仓颉跨文件可见性未能证实 | 想查「顶层 `func` 不加修饰符能否被同包其它文件（测试文件）调用」：`WebFetch` 打 `docs.cangjie-lang.cn` 与 `developer.huawei.com` 的可见性章节**两次都返回空**（SPA 无正文），`WebSearch` 只拿到 DeepWiki 的不完整修饰符表（`public/internal/protected`，无默认值说明） | ⚠️ **不赌**：本次新增的可测函数**一律显式 `public`**。同时登记 **L-APR-2** —— 既有 4 个测试文件（payroll/performance/rate_limit/response）依赖的正是「包内私有跨文件可见」，这条假设至今没被编译器验证过 |
+| 2026-11-24 | **P3.1 前端** | `ApprovalView.vue` +88/−8：状态下拉**追加**（不是插入）`PENDING_MGR`/`PENDING_HR` 两项以免破坏 `pickOption(...,1,'已通过')` 的下标契约；工作台新增「审批级次」「审批链」两列；操作列条件从 `canApprove` 改为后端下发的 `row.myAction === 'APPROVE'`；建单 >3 天出两级提示；提示语按响应 `status` 分级（单级仍保持 `申请已提交`/`审批已通过` 原文，既有断言零放宽） | ✅ `vue-tsc --noEmit`、`eslint .`、`vite build` 三连 exit 0 |
+| 2026-11-24 | **P3.1 mock + E2E** | `mock-server.ts` +191/−16：`ReqRow` 补三键 + 新增 `approvalLogs`/`approvalSteps()`/`approvalChain()`，用 TS **再写一遍**后端状态机并整体重写 `onApproveRequest`；`approval.spec.ts` +245/−1，7 例 → **10 例** | ✅ 全量 **68 passed / 0 failed**（此前基线 65），`mock.unmatched == []` 闸门全绿 |
+| 2026-11-24 | ★ P3.1 既有用例必须跟着语义走，不能放宽 | 「余额边界：恰好扣满」原本用 **5 天**年假一步签完，改双级后 `mgr` 一级通过**不再扣减**，该用例必红 | ✅ 按新语义补 HR 二级步骤（`PENDING_MGR → PENDING_HR → APPROVED`、余额 5→5→0），断言从 1 条变 6 条而不是把 `toBe(0)` 改成 `toBeLessThanOrEqual(5)`。**用例红是因为语义变了，不是因为用例错了** |
+| 2026-11-24 | ★ P3.1 服务端 403 只能绕开 UI 测 | 越级分支下前端已按 `myAction` 藏掉按钮，纯 UI 用例永远打不到 `approve` 的 403 分支，会造成「前端挡住了 = 后端也挡住了」的错觉 | ✅ 新增 `apiPost()`：在已登录页面内 `fetch` 直连接口（带 `Bearer` 头），断言 HTTP 码 + 信封 `message` + **副作用为零**（`approvalSteps`、`leaveBalance`、`status` 三项都不许动）。同时登记 **L-MOCK-2 类风险**：此路径 mock 与后端各写一遍，真实 403 仍待 `E2E_REAL=1` 复验（L-MOCK-1） |
+| 2026-11-24 | ★ P3.1 E2E 首跑 1 红（自写用例的坑） | 「长假可撤回 + 3 天单级」连建两张单，两条 toast 都含「申请已提交」（长假那条是 `申请已提交，超过 3 天的长假需…`），`toast()` 是 `filter({hasText})` ⇒ **strict mode 命中 2 个** | ✅ 建单助手改用 `.last()`。上一轮已犯过同类错（P2.3 的「关闭」按钮），规律是：**Element Plus 的 toast 会叠加存活 3 秒，任何连续两次相同前缀的提示都必须显式取最后一条**；同时刻意不做「等 toast 消失」的 sleep，避免把时序耦合进用例 |
+| 2026-11-24 | ★ **L-APR-2 的证据补强**（写文档时反向查出的自身错误归因） | 为写第十节风险条目，把基线 `6e79923` 的全部顶层函数逐个扫了跨文件引用 | 基线 **20 个非 `public` 顶层 `func`**（`calculateTax` / `buildUserProfileJson` / `maskIdCard` / `unescapeField` / `dispatchRequest` 等）**跨文件引用 0 处**；另 90 个 `public func` 承担全部跨文件调用 | 「包内私有可跨文件」这条假设**既无官方条文、也无基线实例**，只是「未被证伪」⇒ L-APR-2 措辞已升级。同时**推翻我自己的一处取证**：`mysql_pool.cj` 那 10 余个 `let B_*: UInt8 = 0xNN` 是 **P0.1 我自己加的**（`git show 6e79923:...` 匹配 **0 处**），不能当「基线已证实」用，第十一节已改为如实标注。真正有基线先例的是**数组字面量**（全仓仅 `mysql_pool.cj` 的 `args` **1 处**）与**行尾 `+` 续接拼接（193 处）** |
+
 
 ---
 
@@ -400,6 +467,9 @@
 | **L-PRT-3** | 无头环境**验不了真实打印面板**：驱动、纸张来源、中文字体缺失、用户未勾「背景图形」都看不见 | 「A4 单页」这个结论只在 Chromium print-to-PDF 下成立（实测 `MediaBox 594.96×841.92`、`/Count 1`），换物理打印机不保证同结果 | 已用 `print-color-adjust: exact` 强制表头底色（这是不勾背景图形时最常见的塌法），并给三张小表加 `break-inside: avoid` 防「实发金额」掉到第二页。剩余不确定性属用户环境，标注为不消解 |
 | **L-ATT-1** | 应出勤天数是**硬编码常量 22**（`attShouldAttendDays`，5 天 × 4.4 周），库里既无排班表也无工作日历，节假日/调休/大小周一概不算 | 出勤率对**任何人**都只是近似值：法定假多的月份会系统性偏低，2 月会偏高；「合计出勤天数 / 应出勤天数」这类卡片同理 | 有意为之：加一张 `hr_work_calendar` 意味着新的建表脚本、导入逻辑和一整套 E2E 种子，超出 P2.4 那一条需求的范围。已在常量处注释标明口径，且**前端把 22 显示为独立一列**而不是藏起来，让人一眼看出分母是假设值。真实排班就位后只需改 `attShouldAttendDays` 的取值来源，SQL 与出参结构不变 |
 | **L-ATT-2** | 考勤汇总的迟到/早退口径是「**分钟数 > 0 或状态标记**」，而算薪扣款走的是 [payroll_controller.cj:83](./backend-cangjie/src/controller/payroll_controller.cj) 的**仅 `late_minutes > 0`** | 同一员工同一月，「月度汇总」报 1 次迟到、工资条考勤扣款却是 0 元（状态被标成 `LATE` 但分钟数没写）。两处都"对"，用户看到的是自相矛盾 | 本轮**不统一口径**：改算薪规则会动到金额，属薪酬业务决策，且无 SDK 无法回归。已做的止损是①两侧口径都写进代码注释与本表；②`attendance_controller_test.cj` 用 19 个用例把「汇总侧」的口径钉死，将来若有人统一，这里必然红。真正的一致性需要产品侧先定「状态标记算不算迟到」 |
+| **L-APR-1** | `sql/init.sql` 的改动**不会自动作用到已存在的库**：新建表 12 `hr_approval_log` 只在 `init.sql` 里，而存量 `hrms_db` 早已建过库；`hr_leave_overtime.status` 的注释扩写同理需要 `ALTER TABLE ... MODIFY` | 后来者在旧库上直接起服务，审批链写入会 `Table 'hrms_db.hr_approval_log' doesn't exist`，二级流转全部 500 | 本机已用 `mysql.exe` 对该库**实跑过** DDL + `ALTER` 并验证命中（见第九节）。但这是「我这台机器好了」，不是「部署脚本好了」——根治需要一份幂等迁移脚本，属独立工作项，未排期。`init.sql` 的建库路径本身是完整的 |
+| **L-APR-2** | 仓颉「顶层 `func` 不加修饰符 = 包内私有，且同包其它文件可见」**至今没有官方条文证实**（WebFetch 可见性章节两次返回空正文、WebSearch 只给到不含默认值的修饰符表）；更糟的是基线也**给不出反证支持**：本轮扫完基线 **20 个非 `public` 顶层 `func`**，跨文件引用 **0 处** | 若默认语义是「仅本文件可见」，则 `request_controller_test.cj` 与既有 **4 个测试文件**（`payroll`/`performance`/`rate_limit`/`response`）会在 `cjpm test` 首跑时**集体报未定义**——275 个 `@TestCase` 里有 242 个建立在这条假设上 | 本轮已止损：P3.1 新增的 15 个可测函数**一律显式 `public`**，不依赖该假设。旧文件不做无证据的批量改动（改动本身也可能引入新问题），SDK 就位后首跑即以此判别真伪 |
+| **L-APR-3** | 审批状态机、审批链写入、以及 `UNIQUE(request_id, step)` 冲突 → `executeSql` 返回 false → 500 这条并发保护分支，**全部未经编译与真实运行** | E2E 的 10 例绿只证明「前端 + TS 镜像的状态机」自洽，不能证明仓颉那份实现对 `Float64` 比较、`IN (...)` 拼串、事务顺序的处理正确 | 与 L-CJ-1/L-MOCK-1 同性质。已做的兜底：①15 个纯函数写了 33 个 `@TestCase`，期望值用 node 按同算法独立复算过；②状态机在 TS 里**逐函数重写一遍**作为交叉实现（两份同源不同人写的实现能对齐，说明至少不是笔误）；③`step` 取值刻意放在改写 `row.status` **之前**，这类顺序坑已在代码注释里标明。根治仍是 `cjpm build && cjpm test` + `E2E_REAL=1` |
 
 ---
 
@@ -455,6 +525,27 @@
   字符口径只用 `strRuneLen()` = `toRuneArray().size`；**长度校验必须走 rune 口径**
   （MySQL `VARCHAR(n)` 按字符计长，按字节会把中文姓名上限缩水约 1/3）。
 - **`String.contains` 零先例** ⇒ 子串存在性统一走上述 `strHas`。
+
+**P3.1 新增的取证结论（本轮 `git grep` 基线 `6e79923` 实测，计数均可复核）**：
+- **数组字面量 `[..]` 在基线确有先例**：`git grep -n -E "=\s*\[" 6e79923 -- backend-cangjie/src` → **1 处**，
+  即 `mysql_pool.cj` 的 `let args = [ "-h", ..., "-p${globalConfig.dbPass}", ..., "-e", "SOURCE ${unixPath}" ]`
+  —— 多行、元素含插值、类型由元素推断为 `Array<String>`。故 `request_controller.cj` 的
+  `let reqPendingStatuses = ["PENDING", "PENDING_MGR", "PENDING_HR"]` 属**已证实写法**（此前 P2.1 测试文件
+  刻意回避数组字面量只是保守，并非该写法被证伪）。`for (s in reqPendingStatuses)` 亦走已证实的 `for (x in arr)`。
+- **行尾 `+` 续接的多行字符串拼接**：基线 **193 处**（最早 `attendance_controller.cj:12`），
+  `reqTrailJsonFor` 的逐字段拼 JSON 沿用同款排版。
+- **`ArrayList<ArrayList<String>>` 嵌套泛型**：基线 **2 处** ⇒ `loadApprovalTrail` / `reqTrailJsonFor` 的签名可用。
+- **`let X: UInt8 = 0xNN` 顶层带类型注解的十六进制字面量**：**基线没有先例**（`git show 6e79923:.../mysql_pool.cj`
+  匹配 `: UInt8 =` → **0 处**），那批 `B_TAB / B_NUL / B_SUB` 常量是本仓库 P0.1 自己加的，属于「同样未编译」的代码，
+  **不能自证**。故 `reqLongLeaveDays: Float64 = 3.0` 的依据退回更基本的一条：显式类型注解 + 浮点字面量，
+  与基线 `let globalConfig = AppConfig()`、函数签名里的 `Float64` 同族，风险等级低但不等于已证实。
+- ⚠️ **仍未证实（且本轮刻意不依赖）**：顶层 `func` 不加修饰符时「同包其它文件」是否可见。
+  本轮把基线的全部 **20 个非 `public` 顶层 `func`**（`toBase64Url`/`signPayload`/`attendanceRowToJson`/
+  `buildUserProfileJson`/`maskIdCard`/`calculateTax`/`mapPerformanceGrade`/`runMysqlFile`/`dispatchRequest` 等）
+  逐个做了跨文件引用扫描 —— **跨文件引用为 0 处**（基线另有 90 个 `public func`，所有真实的跨文件调用都走这些）。
+  也就是说：这条假设**既无官方条文、也无基线实例**，只是「未被证伪」。
+  **本轮处置**：P3.1 新增的 15 个可测函数**一律显式 `public`**，把这条不确定性从新增代码里彻底摘除；
+  既有 4 个测试文件对该假设的依赖登记为 **L-APR-2**，留给 `cjpm test` 首跑判别。
 
 **单元测试框架（1.0.5 官方逐字，本轮新证实）**：
 - **无需任何 import**（官方：「单元测试框架 API 已在 `std` 的 `unittest` 包、宏在 `std.unittest.testmacro` 包，不需要在测试文件中显式导入」）；若要显式写则两行成对：`import std.unittest.*` + `import std.unittest.testmacro.*`。
@@ -868,6 +959,79 @@ P1.3 收口时把 mock 覆盖量写成「**29 个接口**」，沿用数轮到 P
 `isValidYearMonth`（长度 7、`bytes[4]==0x2D`、月 `01..12`、非 `2` 字头年份）、单人 JSON **整串 pin**（12 键逐字对齐）、
 合计行 10 键、页面与导出的结构计数。
 
+### 12.14 P3.1 长假二级审批的测量值（每条附复跑命令，口径见 11.2）
+
+变更规模（`git diff --numstat`，工作区未提交时实测；⚠️ 该命令统计的是**已跟踪文件**，新增的测试文件不在其中）：
+
+```
+66  2   FOLLOWUP_PLAN.md
+1   1   backend-cangjie/src/controller/dashboard_controller.cj
+239 28  backend-cangjie/src/controller/request_controller.cj
+245 1   frontend-web/e2e/approval.spec.ts
+191 16  frontend-web/e2e/support/mock-server.ts
+88  8   frontend-web/src/views/approval/ApprovalView.vue
+22  4   sql/init.sql
++ 405 行（未跟踪）backend-cangjie/src/controller/request_controller_test.cj
+```
+
+仓颉单测总量（`@TestCase` / `@Assert` 均以 `Select-String` 实测，非累加口算）：
+
+```powershell
+Get-ChildItem -Path backend-cangjie/src -Recurse -Filter *_test.cj | ForEach-Object {
+  "{0,-42} TC={1,-4} AS={2}" -f $_.Name,
+    (Select-String -Path $_.FullName -Pattern '@TestCase' | Measure-Object).Count,
+    (Select-String -Path $_.FullName -Pattern '@Assert\(' | Measure-Object).Count }
+```
+
+| 测试文件 | `@TestCase` | `@Assert` |
+| --- | --- | --- |
+| `crypto_util_test.cj` | 22 | 103 |
+| `jwt_util_test.cj` | 26 | 85 |
+| `response_test.cj` | 26 | 188 |
+| `router_test.cj` | 13 | 57 |
+| `attendance_controller_test.cj` | 19 | 142 |
+| `employee_import_test.cj` | 35 | 300 |
+| `payroll_controller_test.cj` | 32 | 267 |
+| `performance_controller_test.cj` | 30 | 205 |
+| **`request_controller_test.cj`（P3.1 新增）** | **33** | **100** |
+| `rate_limit_test.cj` | 39 | 163 |
+| **合计 / 10 个文件** | **275** | **1610** |
+
+> 订正：第三节 P1.1 的「7 个测试文件 / 188 个 `@TestCase`」是 P1.1 收口时的快照，P2.1/P2.4/P3.1 各加了 1 个文件，
+> 现为 **10 文件 / 275 用例 / 1610 断言**。所有仓颉用例依旧**从未执行**（L-CJ-1）。
+
+mock 分发条数与 E2E：
+
+| 项 | 实测值 | 复跑命令 |
+| --- | --- | --- |
+| `mock-server.ts` 分发条目 | **28**（P3.1 未新增路由，只重写 `onApproveRequest` 语义） | `(Select-String -Path frontend-web/e2e/support/mock-server.ts -Pattern 'if \(method ===' \| Measure-Object).Count` |
+| `approval.spec.ts` 用例数 | 7 → **10** | `npx playwright test e2e/approval.spec.ts --list` |
+| 全量 E2E | **68 passed / 0 failed**（此前基线 65） | `npx playwright test --workers=1` → `1.3m` |
+| 静态口径互证 | `Total: 68 tests in 8 files` | `npx playwright test --list` |
+| 前端三连 | `typecheck` / `lint --max-warnings 0` / `build` 均 exit 0；`✓ built in 7.79s` | `npm run typecheck; npm run lint; npm run build` |
+
+P3.1 状态机的 ground truth（仓颉与 TS 两份实现**必须逐格相同**，node 复算命令见下）：
+
+| 输入 | `reqInitialStatus` | `reqCurrentLevel` | `reqNextStatus(..,"APPROVED")` | 扣年假 |
+| --- | --- | --- | --- | --- |
+| `LEAVE / ANNUAL / 4 天` | `PENDING_MGR` | 1 | `PENDING_HR` | **否** |
+| 上者二级通过 | — | 2 | `APPROVED` | **是，且仅此一次** |
+| `LEAVE / ANNUAL / 3 天`（严格大于才分级） | `PENDING` | 1 | `APPROVED` | 是 |
+| `LEAVE / ANNUAL / 5 天`（余额恰为 5） | `PENDING_MGR` | 1 → 2 | 两步到 `APPROVED` | 5 → 5 → **0** |
+| `OVERTIME / 12 h` | `PENDING`（加班不参与分级） | 1 | `APPROVED` | 否 |
+| 任意态 + `action="REJECTED"` | — | — | `REJECTED`（驳回不分级） | 否 |
+| 任意态 + `action` 不在白名单（如 `"XX"`） | — | — | `""` ⇒ handler 直接 400 | 否 |
+| `APPROVED` / `REJECTED` / `CANCELLED` | — | **0**（终态） | ⚠️ 仍返回 `APPROVED` —— **`reqNextStatus` 不看当前态是否终态**，拦下重复审批的是 handler 前置的 `reqIsPendingLike` 与「已处理」400 | 否 |
+
+> 这一格是刻意写进文档的**契约陷阱**：`reqNextStatus` 是纯「本级动作 → 下一状态」映射，
+> 终态防护由调用点的 `reqIsPendingLike(status)` 负责。若有人只测 `reqNextStatus` 就以为重复审批被挡住了，
+> 会得出完全相反的结论。E2E 用例②「终态后直连接口 → 400 `该申请单已处理，无法重复审批`」正是钉在这条调用顺序上。
+
+```powershell
+# 两份实现交叉核对：直接跑 E2E 的 3 个新用例，它们同时断言 UI、HTTP 与 mock 内部状态
+npx playwright test e2e/approval.spec.ts --grep "长假" --workers=1
+```
+
 
 
 ---
@@ -935,20 +1099,23 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 | 我：`936e0e4` P2.2 前端导入 + E2E | **5 files / 972 insertions(+), 5 deletions(-)** |
 | 我：`86f7b8f` P2.3 工资条打印 | **4 files / 715 insertions(+), 13 deletions(-)**（代码 **603** 行，其余为本文档增量，逐项见 12.12） |
 | 我：`8195ff2` P2.4 考勤月度汇总 | **9 files / 1441 insertions(+), 17 deletions(-)**（逐项见 12.13，仓颉侧含 539 行新单测） |
-| **代码累计（对账口径，排除本文档）** | **47 files / 11899 insertions(+), 100 deletions(-)** |
+| 我：P3.1 长假二级审批（**写入本行时尚在工作区**） | 工作区实测 **51 files / 12668(+), 141(-)**（对比 `8195ff2` 后的 47/11899/100，净增 **4 files / 769 行**）+ 未跟踪 `request_controller_test.cj` **405 行** |
+| **代码累计（含工作区 P3.1，排除本文档）** | **52 files / 13073 insertions(+), 141 deletions(-)** |
 | 含文档累计（`86f7b8f` 提交后实测） | 45 files / 11220 insertions(+), 147 deletions(-) |
 
 三条口径说明：
 1. **代码累计**的复跑命令：`git diff --shortstat 6e79923 HEAD -- . ":(exclude)FOLLOWUP_PLAN.md"`。
    选它做分子是因为它**不受我写多少文档影响** —— 否则「工作量」会随着我补注释、补风险条目无限自增，这个数就没意义了。
+   ⚠️ 本行 P3.1 用的是**去掉 `HEAD` 的工作区版本**（`git diff --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"`），
+   因为 P3.1 提交尚未落地；该命令**统计不到未跟踪文件**，所以 405 行的新单测要手工相加（上表末行已相加）。
 2. 「含文档累计」这一行注定过期：把命令里的 exclude 去掉即可复测（`git diff --shortstat 6e79923 HEAD`），
    但每写一次本行它就自增，所以它**只作趋势参考、不进对账口径**。此处实测值来自 P2.3 提交前的 `git add -A` 暂存区。
 3. 旧版本本节写过「8 files」「38 files / 8082 insertions」「约 29%」，三个数**都是当时口算的**，
    现已全部替换为 `git show --shortstat` 输出（P0 实为 11 files，不是 8）。这正是 11.2 立纪律的直接动因。
 
-⚠️ 诚实结论：按代码插入量 **11899 / 27803 ≈ 43%**（P2.4 入库后实测，上一版为 38%），**仍未达到用户要求的「至少匹配现有需求量」**。
-剩余 P3.1 / P3.2 / P4.1 / P4.2 是主要来源，其中 P4 两个新模块要同时落
-「后端 controller + 仓颉单测 + 前端视图 + mock + E2E」，是唯一有希望把比值推向 60%+ 的工作包；
+⚠️ 诚实结论：按代码插入量 **13073 / 27803 ≈ 47%**（P3.1 工作区实测，上一版 43%），**仍未达到用户要求的「至少匹配现有需求量」**。
+剩余 P3.2 / P4.1 / P4.2 是主要来源，其中 P4 两个新模块要同时落
+「建表 + 后端 controller + 仓颉单测 + 前端视图 + 路由注册 + mock + E2E」，是唯一有希望把比值推向 60%+ 的工作包；
 P5 的 5 份交付文档**不计入**上面的分子（口径 1）。行数仍不是目标，可验证的功能与测试才是 ——
 但用户这句话本身是可量化的，所以我不拿「质量优先」当借口回避它。
 
