@@ -113,8 +113,8 @@
 - [x] **P1.2 接口级集成测试脚本**：`scripts/api-smoke.ps1` 覆盖 4 角色登录、越权 `403`、打卡、审批扣年假、生成工资、工资条金额核对，作为无 CI 时的手工回归。✅ **已完成并经桩验证**：8 个章节 / **112 个断言点**，对「正确后端」桩跑出 `112 通过 / 0 失败 / 0 跳过`（exit 0）；对 5 类人为注入的错误**全部变红**（exit 1）；服务未启动时 exit 2 并给出可操作提示。详见第九节与 `scripts/api-smoke.ps1` 文件头说明。
 - [x] **P1.3 前端 Playwright E2E**：4 角色登录与侧边栏菜单隔离、审批弹窗提交、薪资生成后「我的工资条」金额一致。
       ✅ **已完成并经真实浏览器验证**：5 个 spec（auth 10 / rbac-menu 9 / attendance 8 / payroll 8 / approval 7）= **42 用例**，`--workers=1` 下 **42 passed (1.1m)**；`typecheck` / `eslint --max-warnings 0` / `build` 三连 exit 0。
-      拦截层是**有状态内存 mock**（`route()` 分发表 **27 条**，P1.3 收口时 25 条，P2.2 补 `/employees` + `/employees/import` 两条；逐字段回 `backend-cangjie/src` 源码取契约），fixture teardown 断言 `unmatched == []` —— 前端发起但 mock 未实现的请求会直接让用例失败，这是防「测试通过但契约已漂移」的闸门。
-      ⚠️ **订正**：本节原写「29 个接口」是**未经测量的口算数**。实测口径应为 `mock-server.ts` 里 `if (method ===` 的分发条目数（`Measure-Object` = 27，P1.3 时为 25），且 `src/api/hrms.ts` 的 `*Api` 导出是 47 个，两个数都不等于 29。此后凡写入文档的计数必须附测量命令，见第十一节规则 6。
+      拦截层是**有状态内存 mock**（`route()` 分发表 **28 条**，P1.3 收口时 25 条，P2.2 补 `/employees` + `/employees/import` 两条，P2.4 补 `/attendance/monthly-summary` 一条；逐字段回 `backend-cangjie/src` 源码取契约），fixture teardown 断言 `unmatched == []` —— 前端发起但 mock 未实现的请求会直接让用例失败，这是防「测试通过但契约已漂移」的闸门。
+      ⚠️ **订正**：本节原写「29 个接口」是**未经测量的口算数**。实测口径应为 `mock-server.ts` 里 `if (method ===` 的分发条目数（`Measure-Object` = 28，P1.3 时为 25），且 `src/api/hrms.ts` 的 `*Api` 导出是 47 个，两个数都不等于 29。此后凡写入本文档的计数必须附测量命令，见第十一节 11.2。
       金额一致性实证：emp01 生成后「我的工资条」实发 `￥15796.54`，调项后 `￥16620.26`，与核算中心列表逐分对齐（非硬编码，由 mock 按 `calculateTax` 同口径现算）。
       过程中修掉一个**真实前端缺陷**（L-FE-5 冷启动画像过期）并消除一个**既存假绿**（payroll 精确数组断言），详见第九、十节。
 - [x] **P1.4 GitHub Actions**：`.github/workflows/ci.yml`，前端 `npm ci && npm run typecheck && npm run build`；后端在 SDK 可用时 `cjpm build && cjpm test`（可先只跑前端 job，避免假绿）。
@@ -125,7 +125,7 @@
       ⚠️ 关键实证：CI 用 `E2E_CHANNEL=chromium` 而非本地默认的 `msedge`。这条**已在本机按 CI 等价条件跑过**（`CI=true` ⇒ `workers=2` + `reuseExistingServer:false` 自建 vite dev + Playwright 自带 chromium）：**42 passed (38.8s)**。
 
 **验收**：前端 CI 绿；单测覆盖全部金额与权限相关纯函数；越权与算薪金额有自动化断言。
-      ⚠️ 诚实修正原验收口径：「CI 绿」目前**只覆盖前端**（typecheck/lint/build/**57 个 E2E**；演进：P1.3 42 → P2.2 51 → P2.3 57）。后端 223 个 `@TestCase` 与 `api-smoke.ps1` 的 112 个断言点**仍无执行环境**（L-CJ-1），对应 job 呈 skipped 而非 passed。
+      ⚠️ 诚实修正原验收口径：「CI 绿」目前**只覆盖前端**（typecheck/lint/build/**65 个 E2E**；演进：P1.3 42 → P2.2 51 → P2.3 57 → P2.4 65）。后端 242 个 `@TestCase` 与 `api-smoke.ps1` 的 112 个断言点**仍无执行环境**（L-CJ-1），对应 job 呈 skipped 而非 passed。
 
 ---
 
@@ -196,14 +196,45 @@
   「草稿（尚未发放）」、发放时间留 `—`，而不是禁用按钮 —— HR 代员工先出条是真实需求，状态由纸质件自证。
 - **HR 侧新增入口**：核算中心操作列补「电子凭条」（列宽 150 → 205）。此前只有「我的工资条」页签能看明细，
   HR 只能改数据、无法先出条，属 P2.3 顺带补齐的覆盖空洞。
-- [ ] **P2.4 考勤月度汇总导出**：`GET /api/v1/attendance/monthly-summary?month=&deptId=` 返回出勤率、迟到/早退/请假工时统计，前端一键导出 CSV。
+- [x] **P2.4 考勤月度汇总导出**：`GET /api/v1/attendance/monthly-summary?month=&deptId=` 返回出勤率、迟到/早退/请假工时统计，前端一键导出 CSV。
+      ✅ **已完成并经真实浏览器验证**：新增 `e2e/attendance-summary.spec.ts`（220 行 / **7 用例**），另为 P2.4 暴露的「导出只捞当前页」补了 `payroll.spec.ts` 1 例，全量 **65 passed / 0 failed**；
+      `typecheck`/`eslint --max-warnings 0`/`build` 三连 exit 0。落地要点见下方「P2.4 契约与取证」，新增风险见 L-ATT-1 ~ L-ATT-2。
+
+**P2.4 契约与取证（已落地；「页面数字 = 导出数字」是靠结构保证的，不是靠比对两次截图）**
+- **改动面**（实测 `git show --numstat 8195ff2`，命令见 12.13）：后端 `attendance_controller.cj` **+248/−4**、新增
+  `attendance_controller_test.cj` **539 行 / 19 个 `@TestCase`**、`main.cj` +3；前端 `AttendanceView.vue` **+202/−1**、
+  `hrms.ts` +36、`mock-server.ts` +132/−8、`attendance-summary.spec.ts` 220、`payroll.spec.ts` +33、`PayrollView.vue` +28/−4。
+- **主表是 `hr_employee` 而不是 `hr_attendance`**：以考勤表为主表时，整月一次卡都没打的人**整行消失**，
+  分母跟着变小，出勤率反而**虚高**——这正是这类报表最常见的错法。改成员工左连考勤后，`LEFT JOIN` 产生的
+  `NULL` 行会落进 `CASE` 的 `ELSE` 分支凭空 +1 天，故每个 `CASE` 都加了 `a.id IS NOT NULL` 守卫。
+- **口径**：`ABSENT` 与「有记录但没出勤」都不计出勤天数；迟到 = `late_minutes > 0` **或**状态 `LATE`，早退 = `early_minutes > 0`
+  **或**状态 `EARLY_LEAVE`（历史数据里两类标记都有人写，只认一种会漏计）；请假/加班只认 `status='APPROVED'`，
+  申请中的单子不进报表；`WHERE e.status <> 'RESIGNED'`（离职者不进当月汇总）。
+- **应出勤天数是常量 `attShouldAttendDays = 22`**（无排班表 / 无工作日历），见 L-ATT-1；出勤率 `round2` 后**封顶 100**，
+  `shouldDays <= 0` 返回 0 而不是抛除零。
+- **JSON 合法性靠 `attMonthSafeNum` 逐字节白名单兜**：刻意**不用** `Float64.tryParse`——它接受 `1e5`/`NaN`/`Infinity`，
+  这些值直接插进 JSON 模板会拼出**语法非法**的响应体，前端 `JSON.parse` 整页白屏，且后端仍然 200。
+- **合计行由明细累加**（`attMonthlyTotalsJson`），不是第二条 SQL：两条 SQL 就是两个快照，
+  「卡片 5 人、表格 6 行」这种自相矛盾只能靠单一数据源消除。`/my` 的 `actualAttendDays` 本轮也同步改成
+  排除 `ABSENT` 的计数，与月度汇总同口径。
+- **权限 `requireRoles(ctx, ["ADMIN","HR","MANAGER"])`**，MANAGER 的 `deptId` 由服务端 `getUserDeptId(u)` 强制覆盖，
+  前端即使伪造查询参数也只能看到本部门；`month` 非法则回落到 `SELECT DATE_FORMAT(CURDATE(),'%Y-%m')` 而不是报 400。
+- **CSV 与页面共用同一份 `sumList`/`sumTotals`**，且新增 `refreshSummaryIfNeeded()` 挂在签到 / 签退 / 补卡修正三处写操作之后
+  （否则导出用的是改动前的旧快照）；`PayrollView.exportCsv` 顺带从「导出屏幕上这一页」改成按 `pageSize=100` 翻页捞全量
+  （后端 `payroll_controller.cj:124` 对 `pageSize > 100` 会**静默回落成 20**，不翻页就会少导出人）。
+- **mock 第 28 条分发 `onMonthlySummary` 逐字段镜像后端**（含 MANAGER 限部门、`deptId` 过滤、`ORDER BY deptName, empNo`），
+  前端一旦调用未登记的路径就会被 `unmatched == []` 闸门直接判红。
 
 **验收**（逐项标注兑付状态，不整体打勾）：
 - 「打印预览无侧边栏」✅ **已兑付并有产物可复核**：`payroll-print.spec.ts` 在 print 媒体下断言 `aside`/`#app` hidden，
   同时导出 `test-results/payslip-print.png` 与 `.pdf`（A4 单页），人眼与断言两条路都能查。
 - 「100 行 CSV 导入含错误行时可部分成功并给出定位」⚠️ **口径已被 P2.1 决策改掉**：整批要么全写要么全不写，
   定位靠 `line` 物理行号。故这一条不再按原文验收，改按 P2.1 的「行级错误逐条回显 + 整批不写」兑付（见 `employee-import.spec.ts`）。
-- 「导出报表与页面数字一致」⬜ 待 P2.4。
+- 「导出报表与页面数字一致」✅ **已兑付并有逐格断言可复核**：[attendance-summary.spec.ts](./frontend-web/e2e/attendance-summary.spec.ts)
+  「导出 CSV 的每一格都等于页面上的同一格」把 CSV 的 12 列**逐列映射**回 `#pane-summary` 表格的可见单元格比对
+  （11 列同值，第 5 列「应出勤天数」单独断言恒为 22），并校验文件名 `考勤月度汇总_2026-11.csv`、UTF-8 BOM、
+  `CRLF` 分行、合计行「`N 人`」与 `N × 22` 的应出勤总天数。数据源同源（同一个 `sumList`）+ 逐格比对，
+  任何一侧偷偷做二次计算都会在这里变红。
 
 ---
 
@@ -318,6 +349,13 @@
 | 2026-11-23 | ★ P2.3 不用 `:has()` 的理由 | 直觉写法是 `@media print { body:not(:has(.hrms-print-root)) … }`，一行搞定且无需 JS 参与 | ✅ 改走 `<html>` 模式类：`:has()` 在老浏览器是**整条规则静默失效**，退化形态是「打印出整页 SPA」——用户拿到带侧边栏的工资条而全程无报错，属最坏错误。模式类可被 E2E `toHaveCount` 直接断言，且不依赖 `afterprint`（无头下不可靠） |
 | 2026-11-23 | ★ P2.3 抓到状态残留路径 | 路由切走时 `el-dialog` 随组件卸载，`slipVisible` 不会由 true 变 false，`watch` 不触发，模式类会残留到下一个页面 | ✅ 补 `onBeforeUnmount` 兜底；用例用 `locator.dispatchEvent('click')` 命中 `router-link` 走**真实 SPA 导航**（弹窗遮罩会拦截普通 click，`page.goto` 则是整页刷新、清不清都测不出东西） |
 | 2026-11-23 | P2.3 两处刻意不贴心 | ① 关闭弹窗不清空 `activeSlip`；② 草稿态也能出条，不禁用按钮 | ✅ ①清空会让正文在淡出动画里先消失，专版靠模式类摘除即失效，用例断言「关闭后 print 媒体也打不出它」；②纸质件如实打印「草稿（尚未发放）」+ 发放时间 `—`，由单据自证状态比前端禁用更诚实。另：复算不一致分支 E2E 不可达，登记 **L-PRT-2** |
+| 2026-11-23 | **P2.4** | 考勤月度汇总导出落地：`attendance_controller.cj` +248/−4（新增 `handleAttendanceMonthlySummary` + 7 个纯函数 + 常量 `attShouldAttendDays = 22`，并顺手把 `/my` 的 `actualAttendDays` 改成排除 `ABSENT` 的计数，与汇总同口径）、`main.cj` +3 注册路由、新增 `attendance_controller_test.cj` 539 行 / **19 个 `@TestCase`**；前端 `AttendanceView.vue` +202/−1（第 3 个页签「月度汇总导出」：月份/部门筛选 + 6 张合计卡片 + 11 列明细 + 一键 CSV）、`hrms.ts` +36、`mock-server.ts` +132/−8（第 28 条分发 `onMonthlySummary`）、新增 `attendance-summary.spec.ts` 220 行 / 7 用例、`payroll.spec.ts` +33、`PayrollView.vue` +28/−4 | ✅ 全量 **65 passed / 0 failed**（`--workers=1`）；`typecheck`·`lint --max-warnings 0`·`build` 三连 exit 0。仓颉侧仍**未经编译**（L-CJ-1） |
+| 2026-11-23 | ★ P2.4 主表选错会让出勤率虚高 | 直觉写法是 `FROM hr_attendance`，但整月一次卡都没打的人**整行消失**，分母跟着缩小 —— 越是缺勤越多的人越不出现在报表里，出勤率反而上升 | ✅ 主表改为 `hr_employee`（`WHERE e.status <> 'RESIGNED'`）。换表后新的坑：`LEFT JOIN` 的 `NULL` 行会落进 `CASE ... ELSE` 分支被**凭空算成 1 天出勤**，故每个 `CASE` 都补 `a.id IS NOT NULL` 守卫。用例「整月无打卡者以 0 天出现在报表里」直接断言 5 行齐全 |
+| 2026-11-23 | ★ P2.4 数值注入 JSON 的合法性 | 把 `late_minutes` 这类 `VARCHAR` 存来的数字直接 `${}` 插进 JSON 模板，遇到 `1e5` / 空串 / `NaN` 就拼出**语法非法**的响应体，前端 `JSON.parse` 白屏而后端依旧 200 | ✅ 新增 `attMonthSafeNum(raw, defaultText)` 逐字节白名单校验（只放数字、单个 `.`、可选前导 `-`）。**刻意不用 `Float64.tryParse`**：它接受 `1e5`/`NaN`/`Infinity`，能解析 ≠ 能安全插入。`attendance_controller_test.cj` 里专门有一组「拒绝集」用例覆盖这些输入 |
+| 2026-11-23 | ★ P2.4 导出与页面的快照漂移 | 「页面数字 = 导出数字」不只需要同源数据结构，还需要**同一份快照**：签退或补卡修正之后，屏幕上的汇总还停留在改动前 | ✅ 新增 `refreshSummaryIfNeeded()` 挂到 `handleClockIn` / `handleClockOut` / `submitFix` 三处写操作末尾（条件：有权限且 `sumLoaded`）。没加载过就不发请求，避免给不看汇总的人多加一次轮询 |
+| 2026-11-23 | ★ P2.4 顺带抓到薪资导出漏行 | `PayrollView.exportCsv` 直接把**屏幕上那一页**写成 CSV，`pageSize` 默认 10 时「导出全部」实际只导出 10 人 | ✅ 改为按 `pageSize=100` 循环翻页直到 `batch.length < pageSize` 或 `rows.length >= total`；依据是 `payroll_controller.cj:124` 对 `pageSize > 100` **静默回落成 20**，所以只能拿 100 而不能拿 10000。`payroll.spec.ts` 新增 1 例断言出站参数与导出行数 |
+| 2026-11-23 | ★ P2.4 E2E 首跑 6 红 → 全绿（两处假红的根因） | ① `pickMonth` 写成「先 `fill`+`Enter` 再 `waitForRequest`」，Vue 的 `@change` 是微任务，请求早于监听器发出 ⇒ 10s 超时；② `PAYROLL_MONTH` 恰等于真实当前月（2026-11），`el-date-picker` 值未变化，**`@change` 根本不触发** | ✅ ① 一律**先注册 waiter 再触发动作**；② 先比对 `inputValue()`，相同则 early return。证据取自 `test-results/**/error-context.md` 的 aria 快照（combobox 值已是 `2026-11`、卡片已是 5 人 / 1.82%）——**先拿到运行时证据再改断言**，否则极易顺手把断言放松成假绿 |
+| 2026-11-23 | ★ P2.4 两处「测我自己编的数据」的诱惑 | ① 出勤率断言写成 `0.00`，实际表格输出 number `0`；② 想在 payroll 导出用例里断言 toast，但 `exportCsv` 从来没有成功提示 | ✅ ① 改成逐格 `toBe('0')`，以**渲染结果**为准而非叙述语感（同 11.2 教训）；② 去掉 toast 断言，改断言 `download.suggestedFilename()` 与行数 —— 断言不存在的行为比不测更糟 |
 | 2026-11-23 | P2.3 用例首跑纠偏 2 处 | ① `getByRole('button',{name:'关闭'})` strict violation —— EP 叉号的可访问名是「关闭此对话框」，包含匹配命中 2 个；② 断言 `toContainText('发放时间：')` 落空 —— 专版里「发放时间」是表格 `<th>`，**没有冒号**，冒号只存在于抬头那行 `<span>` | ✅ ① 加 `exact: true`；② 改为定位该行的 `<td>` 末格 `toHaveText('—')` / `toHaveText(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)`，断言从「文案存在」升级为「格子内容」。教训同 11.2：**模板里写没写标点，要以模板为准，不能凭叙述语感** |
 
 ---
@@ -339,7 +377,7 @@
 | ~~L-FE-3~~ | ~~`UserProfile.isActive` 在 TS 里标成 `number`，而 `auth_controller.cj:34` 出参是 `${r[4] == "1"}`（**布尔**）~~ | ~~任何 `user.isActive === 1` 的写法静默恒假，且 `vue-tsc` 不会报错~~ | ✅ **已修**：类型改为 `boolean` 并注释标明后端出处；mock 里原有的 `true as unknown as number` 强转一并删除（该强转本身就是这个偏差的化石证据）。当前无消费方，属**消除陷阱**而非修复线上故障 |
 | ~~L-FE-4~~ | ~~考勤「修正」弹窗只回传 `status`/`remark`，后端对 `lateMinutes`/`earlyMinutes` 取 `getJsonInt(..., 0)`~~ | ~~一次修正即把迟到分钟数清零，进而让「迟到/早退次数」与算薪扣款失真~~ | ✅ **已修 + 已加回归锁**：[attendance.spec.ts:144](./frontend-web/e2e/attendance.spec.ts) 「修正考勤不得抹掉迟到分钟数」钉住回传当前分钟数这一行为 |
 | ~~L-FE-5~~ | ~~`auth.user` 只从 `localStorage.hrms_user` 水合（登录那一刻的快照），旧守卫仅在 `!auth.user` 时回源 `/auth/me` ⇒ **整页刷新永不刷新画像**~~ | ~~管理员被改角色后仍按旧角色放行菜单；审批通过的年假已扣但页面显示旧余额；账号被禁用仍停留在已登录视图~~ | ✅ **已修**：[router/index.ts](./frontend-web/src/router/index.ts) 增加模块级 `profileSynced`，每次整页加载后首次进入受保护路由强制 `refreshProfile()` 一次（来源为 `/login` 时跳过）。回归由 `approval.spec.ts` 的三处年假余额断言（含 `page.reload()` 后仍为 `4`）钉死。**注意**：该守卫的 `catch` 对 401 以外的异常**保留本地画像放行**，这是刻意取舍——不能让后端抖动把已登录用户踢下线，代价是极端情况下仍可能短暂看到旧数据 |
-| L-MOCK-1 | E2E 的 27 条 `route()` 分发条目（口径见 11.2，原写「29 个接口」系口算错）由**有状态内存 mock** 提供，`E2E_REAL=1` 直连真实后端的路径**从未跑过**（无 SDK，后端起不来） | 「51 passed」证明的是**前端逻辑 + 前端对契约的理解**自洽，不等于**后端实现无缺陷** | 与 `L-SMOKE-1` 同性质。所有 mock 契约均逐字段 `Read` 自 `backend-cangjie/src`（第九节有取证行），SDK 就位后首件事是 `E2E_REAL=1` 复跑；届时失败**默认判为 mock 与后端的漂移**，以源码为准修 mock。**P2.2 新入这条风险的最大实例**：mock 此前**完全没有 `/employees` 路由**，员工花名册在 P1.3~P2.1 期间其实是「前端写好、E2E 从未覆盖列表」的空白区，直到 P2.2 需要「导入后回列表检索」才暴露 ⇒ 已补 `GET /employees`（20 出参 + 4 筛选 + MANAGER 限本部门 + 分页回落）与 `POST /employees/import` |
+| L-MOCK-1 | E2E 的 28 条 `route()` 分发条目（口径见 11.2，原写「29 个接口」系口算错）由**有状态内存 mock** 提供，`E2E_REAL=1` 直连真实后端的路径**从未跑过**（无 SDK，后端起不来） | 「65 passed」证明的是**前端逻辑 + 前端对契约的理解**自洽，不等于**后端实现无缺陷** | 与 `L-SMOKE-1` 同性质。所有 mock 契约均逐字段 `Read` 自 `backend-cangjie/src`（第九节有取证行），SDK 就位后首件事是 `E2E_REAL=1` 复跑；届时失败**默认判为 mock 与后端的漂移**，以源码为准修 mock。**P2.2 新入这条风险的最大实例**：mock 此前**完全没有 `/employees` 路由**，员工花名册在 P1.3~P2.1 期间其实是「前端写好、E2E 从未覆盖列表」的空白区，直到 P2.2 需要「导入后回列表检索」才暴露 ⇒ 已补 `GET /employees`（20 出参 + 4 筛选 + MANAGER 限本部门 + 分页回落）与 `POST /employees/import` |
 | L-MOCK-2 | mock 是「按我读到的源码写的」，存在**读错字段**的残余风险 | 字段名/口径同时写错时 mock 与 spec 会自洽假绿 | 缓解手段是 teardown 的 `unmatched == []` 闸门（前端发起而 mock 未实现的接口必红）+ 分页/鉴权分支照抄后端语义；**根治手段只有 `E2E_REAL=1`**，见 L-MOCK-1 |
 | L-E2E-1 | 整页加载后的 `page.on('request')` 监听器**只能在导航之后挂载**，早于监听器完成的请求采不到 | 对采到的请求做 `toEqual([精确数组])` 会退化成**计时器**，随机假绿/假红（`payroll.spec.ts` 的旧断言就假绿了若干轮才被揭穿） | 纪律固化：**导航后一律断言「不该出现的为空集」+ `toContain(关键项)`，禁止精确数组**；确需精确计数时改用 `page.route` 侧计数（拦截点必然全采） |
 | L-E2E-2 | `--workers` 在本终端默认取到 `2`（`CI` 环境变量为真） | 与本地 `vite` 单实例预览服务并发时偶发抖动，报错形态像用例问题 | 本地复跑显式 `--workers=1`；CI 里由 Playwright 自己起 preview，不受此影响 |
@@ -360,6 +398,8 @@
 | **L-PRT-1** | 打印专版**只有工资条这一张单**，且字段上限就是列表行 `payrollRowToJson` 的 17 个 | 「核算中心整表打印」「按部门批量出条」都没有；若后端将来把补贴/奖金拆成明细行，纸质件不会自动跟着变 | 有意收窄：P2.3 只兑付第四节那一条需求。机制已通用化（`html` 模式类 + `.hrms-print-root` + `.hrms-print-sheet`），P2.4 若需打印可直接复用，不必再造第二套 |
 | **L-PRT-2** | 「复算校验**不一致**」这条告警分支在 E2E 里**不可达** | mock 与后端同源计算，正常数据永远一致；CI 全绿也从未真正打印过一张「不一致」的单，该分支只有静态复核 | 诚实登记而非补测试：要触发它得人为篡改一次 `netSalary`，而这会让用例变成「测我自己编的数据」。SDK 就位后用 `E2E_REAL=1` 跑真实后端，若两侧口径漂移就会当场显形 —— 这正是这条分支存在的目的 |
 | **L-PRT-3** | 无头环境**验不了真实打印面板**：驱动、纸张来源、中文字体缺失、用户未勾「背景图形」都看不见 | 「A4 单页」这个结论只在 Chromium print-to-PDF 下成立（实测 `MediaBox 594.96×841.92`、`/Count 1`），换物理打印机不保证同结果 | 已用 `print-color-adjust: exact` 强制表头底色（这是不勾背景图形时最常见的塌法），并给三张小表加 `break-inside: avoid` 防「实发金额」掉到第二页。剩余不确定性属用户环境，标注为不消解 |
+| **L-ATT-1** | 应出勤天数是**硬编码常量 22**（`attShouldAttendDays`，5 天 × 4.4 周），库里既无排班表也无工作日历，节假日/调休/大小周一概不算 | 出勤率对**任何人**都只是近似值：法定假多的月份会系统性偏低，2 月会偏高；「合计出勤天数 / 应出勤天数」这类卡片同理 | 有意为之：加一张 `hr_work_calendar` 意味着新的建表脚本、导入逻辑和一整套 E2E 种子，超出 P2.4 那一条需求的范围。已在常量处注释标明口径，且**前端把 22 显示为独立一列**而不是藏起来，让人一眼看出分母是假设值。真实排班就位后只需改 `attShouldAttendDays` 的取值来源，SQL 与出参结构不变 |
+| **L-ATT-2** | 考勤汇总的迟到/早退口径是「**分钟数 > 0 或状态标记**」，而算薪扣款走的是 [payroll_controller.cj:83](./backend-cangjie/src/controller/payroll_controller.cj) 的**仅 `late_minutes > 0`** | 同一员工同一月，「月度汇总」报 1 次迟到、工资条考勤扣款却是 0 元（状态被标成 `LATE` 但分钟数没写）。两处都"对"，用户看到的是自相矛盾 | 本轮**不统一口径**：改算薪规则会动到金额，属薪酬业务决策，且无 SDK 无法回归。已做的止损是①两侧口径都写进代码注释与本表；②`attendance_controller_test.cj` 用 19 个用例把「汇总侧」的口径钉死，将来若有人统一，这里必然红。真正的一致性需要产品侧先定「状态标记算不算迟到」 |
 
 ---
 
@@ -374,6 +414,8 @@
 `ArrayList.add/toArray/size/[]`；`Array<T>(size, repeat: value)` —— **本轮双重背书**：① 官方 std.core 文档原文「该构造函数**不会拷贝 `repeat`**，如果 `repeat` 是一个引用类型，构造后数组的每一个元素都将指向相同的引用」；② 官方社区可运行示例 `Array<Int64>(3, repeat: 1)`。此前一度因搜索结果把另一重载渲染成 `init(size: Int64, item!: T)` 而误判 `repeat:` 是错参数名，追加查证后确认**参数名就是 `repeat`**，`crypto_util.cj`/`rate_limit.cj` 的写法无需改动；`File.writeTo/exists/remove`；`Directory.create(recursive:)`；
 `executeWithOutput` → `(Int64, Array<UInt8>, Array<UInt8>)`；`AtomicInt64.fetchAdd`；
 `Int64/UInt16/Float64.tryParse`、`?? def`、`if (let Some(x) <- ...)`；
+（⚠️ P2.4 补注：「能解析」≠「能安全拼进 JSON」。`Float64.tryParse` 接受 `1e5`/`NaN`/`Infinity`，
+ 这三者插进 JSON 模板会拼出**语法非法**的响应体，故 `attMonthSafeNum` 刻意改用逐字节白名单，见第四节 P2.4 与 12.13）
 `toHexString`、`SHA256().write/finish`、`toBase64String/fromBase64String`；
 切片 `s[..n]` / `s[(i+1)..]`、`if` 表达式赋值、`match/case`、`for (x in arr)`、`try/finally` 内 return；
 **多语句 `match` 臂**（`case Some(x) =>` 后跟整段缩进块、块内再嵌 `match`）、**元组解构 `let (a, b) = f()`**（基线 `payroll_controller.cj:98,186`、`performance_controller.cj:171`、`mysql_pool.cj:61,84,126,136`）；
@@ -464,7 +506,7 @@
 ### 11.2 文档计数纪律（P2.2 建立，起因是本文档自己犯过一次口算错）
 
 P1.3 收口时把 mock 覆盖量写成「**29 个接口**」，沿用数轮到 P2.2 才被发现：实测 `mock-server.ts` 里
-`if (method ===` 的分发条目只有 25 条（P2.2 后 27 条），`src/api/hrms.ts` 的 `*Api` 导出是 47 个，
+`if (method ===` 的分发条目只有 25 条（P2.2 后 27 条，P2.4 后 28 条），`src/api/hrms.ts` 的 `*Api` 导出是 47 个，
 **两个口径都得不出 29**。这类数字一旦进入文档就会被后续章节当事实引用，危害等同于代码里的错断言。
 
 **规则**：写入本文档的**任何计数**（接口数、用例数、断言点数、文件数、行数）必须满足：
@@ -773,6 +815,59 @@ P1.3 收口时把 mock 覆盖量写成「**29 个接口**」，沿用数轮到 P
 代扣 `-￥923.56 −￥3515.00 −￥966.28 = −￥5404.84`，实发 `￥15796.54` —— 三个数由**前端 `slipCheck` 独立复算**得出，
 用例同时断言页脚文案与记账 `netSalary` 一致，所以「打印件数字与后端一致」不是靠肉眼比对两张页面得出的结论。
 
+### 12.13 P2.4 考勤月度汇总的测量值（每条附复跑命令，口径见 11.2）
+
+改动量（cwd 仓库根，命令 `git show --numstat --format="" 8195ff2`）：
+
+| 文件 | 实测 |
+| --- | --- |
+| `backend-cangjie/src/controller/attendance_controller.cj` | **+248 / −4** |
+| `backend-cangjie/src/controller/attendance_controller_test.cj` | 新增 **+539 / −0** / **19 个 `@TestCase`** |
+| `backend-cangjie/src/main.cj` | +3 / −0 |
+| `frontend-web/src/views/attendance/AttendanceView.vue` | **+202 / −1**（358 → 559 行） |
+| `frontend-web/src/api/hrms.ts` | +36 / −0 |
+| `frontend-web/e2e/support/mock-server.ts` | +132 / −8 |
+| `frontend-web/e2e/attendance-summary.spec.ts` | 新增 **220 行** / **7 个 `test(`** / **50 处 `expect(`** |
+| `frontend-web/e2e/payroll.spec.ts` | +33 / −0（260 → 293 行，新增 1 例） |
+| `frontend-web/src/views/payroll/PayrollView.vue` | +28 / −4（导出改翻页） |
+| 提交合计 | **9 files / 1441 insertions(+), 17 deletions(-)** |
+
+计数命令（cwd `frontend-web`；`(Get-Content …).Count` 与 `Select-String … | Measure-Object`）：
+
+```powershell
+(Get-Content src\views\attendance\AttendanceView.vue).Count   # 559
+(Get-Content e2e\attendance-summary.spec.ts).Count             # 220
+(Get-Content e2e\payroll.spec.ts).Count                        # 293
+(Select-String -Path e2e\attendance-summary.spec.ts -Pattern '^\s*test\(' | Measure-Object).Count   # 7
+(Select-String -Path e2e\attendance-summary.spec.ts -Pattern 'expect\(' | Measure-Object).Count      # 50
+# mock 分发条目（全文档统一口径 = 行首 4 空格的 `if (method ===`，见 11.2）
+(Select-String -Path e2e\support\mock-server.ts -Pattern '^    if \(method === ' | Measure-Object).Count   # 28
+# 后端单测总数（`-Path` 不支持 `**`，必须走 Get-ChildItem -Recurse）
+(Get-ChildItem -Path ..\backend-cangjie\src -Recurse -Filter *_test.cj | Select-String -Pattern '@TestCase' | Measure-Object).Count   # 242
+```
+
+验证结果（`npx playwright test --workers=1 --reporter=line`，末行汇总）：**65 passed / 0 failed**（8 个 spec 文件），
+`npx playwright test --list` 亦为 `Total: 65 tests in 8 files`，两个口径互相印证。
+`npm run typecheck` / `npm run lint`（`--max-warnings 0`）/ `npm run build` 三连 exit 0。
+仓颉侧 **19 个新用例从未执行**（L-CJ-1），期望值全部用 node 独立复算，见下表。
+
+汇总数字的独立复算（分母恒为 `22 × 人数`，因为 L-ATT-1）：
+
+| 口径 | 手算 | 断言值 |
+| --- | --- | --- |
+| 全员 5 人 / 合计出勤 2 天 | `2 / (22×5) = 1.8181…` | `1.82%` |
+| `EMP20260004`（唯一迟到者，2 天） | `2 / 22 = 9.0909…` | `9.09` |
+| `EMP20260004` 迟到明细 | 1 次 / 20 分钟；请假 1 天；加班 3 h（仅 `APPROVED`） | 卡片 `1 / 0`、`20 / 0`、`1 天 / 3 h` |
+| 整月无打卡者 | `0 / 22 = 0` | 渲染为 `0`（**不是** `0.00`，表格直接输出 number） |
+| 切 `2026-08` | `EMP20260003` 1 天 → `4.5454…` | `4.55`；`EMP20260002` → `0` |
+| MANAGER 限本部门 3 人 | `2 / (22×3) = 3.0303…` | `3.03%` |
+| CSV 合计行 | `N` 人 → 应出勤总天数 `N × 22` | `5 人` / `110` |
+
+`attendance_controller_test.cj` 的 19 个用例分组：谓词（`attMonthIsLate` / `attMonthIsEarly` 的状态标记与分钟数四象限）、
+出勤率边界（`≤0` 分母、`>100` 封顶、`round2`）、`attMonthSafeNum` **拒绝集**（`1e5` / `NaN` / `Infinity` / `12,345` / `+5` / 空串 / 双点）、
+`isValidYearMonth`（长度 7、`bytes[4]==0x2D`、月 `01..12`、非 `2` 字头年份）、单人 JSON **整串 pin**（12 键逐字对齐）、
+合计行 10 键、页面与导出的结构计数。
+
 
 
 ---
@@ -839,7 +934,8 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 | 我：`be92fca` P2.1 后端导入 + 单测 | **4 files / 1403 insertions(+), 3 deletions(-)** |
 | 我：`936e0e4` P2.2 前端导入 + E2E | **5 files / 972 insertions(+), 5 deletions(-)** |
 | 我：`86f7b8f` P2.3 工资条打印 | **4 files / 715 insertions(+), 13 deletions(-)**（代码 **603** 行，其余为本文档增量，逐项见 12.12） |
-| **代码累计（对账口径，排除本文档）** | **44 files / 10466 insertions(+), 91 deletions(-)** |
+| 我：`8195ff2` P2.4 考勤月度汇总 | **9 files / 1441 insertions(+), 17 deletions(-)**（逐项见 12.13，仓颉侧含 539 行新单测） |
+| **代码累计（对账口径，排除本文档）** | **47 files / 11899 insertions(+), 100 deletions(-)** |
 | 含文档累计（`86f7b8f` 提交后实测） | 45 files / 11220 insertions(+), 147 deletions(-) |
 
 三条口径说明：
@@ -850,8 +946,8 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 3. 旧版本本节写过「8 files」「38 files / 8082 insertions」「约 29%」，三个数**都是当时口算的**，
    现已全部替换为 `git show --shortstat` 输出（P0 实为 11 files，不是 8）。这正是 11.2 立纪律的直接动因。
 
-⚠️ 诚实结论：按代码插入量 **10466 / 27803 ≈ 38%**，**仍未达到用户要求的「至少匹配现有需求量」**。
-剩余 P2.4 / P3.1 / P3.2 / P4.1 / P4.2 是主要来源，其中 P4 两个新模块要同时落
+⚠️ 诚实结论：按代码插入量 **11899 / 27803 ≈ 43%**（P2.4 入库后实测，上一版为 38%），**仍未达到用户要求的「至少匹配现有需求量」**。
+剩余 P3.1 / P3.2 / P4.1 / P4.2 是主要来源，其中 P4 两个新模块要同时落
 「后端 controller + 仓颉单测 + 前端视图 + mock + E2E」，是唯一有希望把比值推向 60%+ 的工作包；
 P5 的 5 份交付文档**不计入**上面的分子（口径 1）。行数仍不是目标，可验证的功能与测试才是 ——
 但用户这句话本身是可量化的，所以我不拿「质量优先」当借口回避它。
