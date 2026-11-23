@@ -521,3 +521,66 @@
 > 只发 1 次错误口令，避免污染真实账号），但「XFF 解析是否正确」这条仍未断言，见 L-SMOKE-1；
 > 各 controller 的 handler 依赖 `queryRows`（需真库）；`expiresAt` 相关的「窗口/封锁到期」分支
 > 因**无法注入时钟**而不测，只测同一秒内必然成立的状态迁移。
+
+---
+
+## 十三、远端仓库现状与推送方案（2026-11-23 实测，非推测）
+
+> 本节记录**只能从远端获得**的事实。`git remote add` 与 `git fetch` 已实际执行，凭据可用
+> （credential.helper=manager，`git ls-remote` 无需交互即成功），但**尚未 push 过任何内容**。
+
+### 13.1 远端拓扑
+
+| 项 | 值 |
+| --- | --- |
+| remote | `origin = https://github.com/whwwwc1-hue/-.git`（仓库名就是一个连字符 `-`） |
+| 远端分支 | `main` / `zc` / `zys`（`zc` 即本用户，`zys` 疑为另一协作者） |
+| `origin/main` 历史 | `1bdde7e` Initial commit → `62ac357` "feat: complete Cangjie 1.0.5 + Vue 3 full-stack HRMS project" → `c76f07f` Merge pull request **#1** from `waveingsheep/main` |
+| 本地 `main` 历史 | `6e79923` baseline snapshot → `62921a7` P0 hardening → `a6567ca` P1（30 files / 6978 insertions） |
+| **共同祖先** | **无**（`git merge-base main origin/main` 返回空、exit 1；两侧 root commit 不同：本地 `6e79923`，远端 `1bdde7e`） |
+| 树差异 | `git diff --stat origin/main main` = **41 files changed, +13067 / −104**，其中 A=22（本轮新增）/ M=18 / **D=1** |
+
+**结论**：历史不相连纯粹是因为接手时在工作副本里 `git init` 重新起了仓库；**内容上本地树 = 远端树 + 我的工作**。
+唯一「远端有、本地没有」的文件是 `backend-cangjie/.env`。
+
+### 13.2 ⚠️ 远端 `main` 把 `.env` 提交进了版本库
+
+`D backend-cangjie/.env` 表示 `origin/main` **跟踪**着 `backend-cangjie/.env`，而我本地已把它列入 `.gitignore` 且不再跟踪。
+含义与对策：
+
+- 这是**既有的凭据泄漏**，不是我造成的，但我的下一次推送若走「整树覆盖」，会**顺带删掉协作者依赖的这个文件**。
+- 因此**禁止**用 `git push -f origin main`：那会抹掉 `1bdde7e/62ac357/c76f07f` 三个远端提交与 PR #1 的历史，且属于 force push 主干。
+- 正确做法（尚未执行，需用户确认）：`git merge --allow-unrelated-histories -s ours origin/main`
+  —— 用 `-s ours` 策略**只接parent 不改树**（结果树与当前本地树逐字节一致），使 `origin/main` 成为祖先；
+  之后 push `main` 就是 **fast-forward，不需要 force**。副作用是在合并提交里删除 `backend-cangjie/.env`
+  —— 这个副作用**必须事先告诉用户**（可能影响 `zys` 的本地环境），我不擅自做。
+- 无论最终怎么推，都应在仓库里另行处理：从历史中清除 `.env`（`git filter-repo`）+ 轮换其中凭据。此事项超出本次开发范围，记录备查。
+
+### 13.3 推送决策清单（留待用户选择，我不擅自改共享主干）
+
+| 方案 | 操作 | 风险 | 备注 |
+| --- | --- | --- | --- |
+| A 推分支 + PR | 把 `main` 推到新分支（如 `trae/p1`），在 GitHub 开 PR 指向 `main` | 低 | 不动主干；PR 的 diff 即 41 文件那份；`on: push` 不会在非主干触发，需靠 `pull_request` 触发 CI |
+| B `-s ours` 合并后推主干 | 见 13.2 | 中（删 `.env`；主干对协作者前移） | 唯一能「非 force 推 main」的路径 |
+| C 只推 `zc` 分支 | 覆盖远端 `zc`（其 tip=`1bdde7e`，是本地历史里**没有**的提交，需先确认那是用户自己的旧分支） | 中 | 会丢掉远端 `zc` 独有的对象，需 `--force` ⇒ 未经用户同意不做 |
+
+**已排除项**：任何 `push --force` 到 `main`。
+
+### 13.4 L-CI-1 仍未闭合
+
+`ci.yml` 只在本机以「CI 等价条件」验证过（`E2E_CHANNEL=chromium` + `CI=true` ⇒ 42 passed）。
+GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 13.3 中任一推送，再回来看 Actions，
+失败就回来修 workflow。该义务在推送完成前不得勾销。
+
+### 13.5 工作量对照（用户要求的「至少匹配现有工作量」）
+
+| 来源 | 规模 |
+| --- | --- |
+| 基线 `6e79923`（接手快照） | 111 files / **27803** insertions |
+| 我：`62921a7` P0 加固 | 8 files（`crypto_util`/`jwt_util`/`response`/`router`/`rate_limit`/`main`/`dbconfig`/`start-backend`） |
+| 我：`a6567ca` P1 全量 | **30 files / 6978 insertions**（22 新增） |
+| 累计（`git diff --shortstat 6e79923 HEAD`） | 38 files / **8082** insertions |
+
+⚠️ 诚实口径：按行数我目前约为基线的 **29%**，**尚未达标**。P2~P5（4 个功能 + 2 项审批增强 + 2 个新模块 + 5 份交付文档）
+是补齐量的主要来源，其中前端 mock/spec 与后端新 controller 单测的行数「含金量」高于文档，但**行数本身不是目标**，
+可验证的功能与测试才是。
