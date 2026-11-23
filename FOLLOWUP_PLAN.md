@@ -130,7 +130,17 @@
 
 ## 四、任务包 P2：导入导出与报表（对应指南工作包 B）
 
-- [ ] **P2.1 员工花名册批量导入**：`POST /api/v1/employees/import`，接收 JSON 数组（前端解析 CSV），逐行校验工号唯一/部门存在，返回 `{ success, failed: [{row, reason}] }`，整批一个事务语义（可先实现为「校验全通过再写库」），并写审计日志。
+- [x] **P2.1 员工花名册批量导入**：`POST /api/v1/employees/import`，逐行校验工号唯一/部门存在，返回 `{ total, successCount, failedCount, imported, dryRun, failed: [{row, field, reason}] }`，整批一个事务语义（实现为「校验全通过再写库」），并写审计日志。**⚠️ 与计划有 2 处有意偏离，见下方「P2.1 契约」与 L-IMP-2。**
+
+**P2.1 契约（已落地，P2.2 前端必须按此实现，勿再按上面那句旧描述写）**
+- 请求：`POST /api/v1/employees/import`，body = `{"csv": "<CSV 纯文本>", "dryRun": <bool>}`。
+  **CSV 解析放后端**，原因：校验口径必须只有一个权威；若前端解析、后端只收 JSON 数组，
+  则「什么算一行」「引号怎么转义」「空行算不算数据」有两套实现，必然漂移。
+  前端只做预览，不拥有判定权。（附带原因：stdx JSON 的数组 API 在基线零先例，见第十一节。）
+- 表头 13 列固定名（顺序无关，按列名匹配）：`工号,姓名,性别,手机号,邮箱,身份证号,部门,岗位,基本薪资,年假余额,入职日期,合同到期日期,状态`。
+- 状态接受 `ACTIVE/在职`、`PROBATION/试用期`、`RESIGNED/离职`；性别接受 `1/2/0`、`男/女/M/F/MALE/FEMALE`（大小写不敏感）。
+- 整批 ≤ 500 行；任一行为空则**整批不写库**（`imported: 0`），错误行全量回显；`dryRun` 只校验不落库。
+- 写库：一条 SQL 文本内 `START TRANSACTION` + 多值 `INSERT hr_employee` + `INSERT ... SELECT` 建 `sys_user`（初始口令统一 `123456` 的哈希）+ `COMMIT`。
 - [ ] **P2.2 CSV 模板下载 + 前端解析**：[EmployeeView.vue](./frontend-web/src/views/employee/EmployeeView.vue) 增加「批量导入」对话框，浏览器端解析（含 GBK/UTF-8 BOM 处理），预览前 20 行与错误行高亮。
 - [ ] **P2.3 电子工资条打印/PDF**：[PayrollView.vue](./frontend-web/src/views/payroll/PayrollView.vue) 弹窗加 `@media print` 专版样式 + 「打印/导出 PDF」，字段含应发各项、五险一金、个税、实发。
 - [ ] **P2.4 考勤月度汇总导出**：`GET /api/v1/attendance/monthly-summary?month=&deptId=` 返回出勤率、迟到/早退/请假工时统计，前端一键导出 CSV。
@@ -232,6 +242,13 @@
 | 2026-11-23 | P1.4 反假绿 | `backend` 作业里的 `api-smoke` 步骤**故意 `exit 1`** | ✅ 该步骤需要「已启动的后端 + `hrms_db`」，CI 里两样都还没接入。若此处静默跳过，一旦有人启用 `BACKEND_CI_ENABLED`，就会看到「build+test+smoke 全绿」的假象。改为明确 `::error::` + `exit 1`，把「没接线」暴露成刺眼的红 |
 | 2026-11-23 | ★ P1 提交前自审 | 提交前把**无法编译的后端改动**逐处回基线取证（`git grep <pat> 6e79923` 是这里唯一的武器）：① `case X =>` 后接多条语句 —— 基线 `jwt_util.cj:85-87` 正是此形 ✅；② `Array<UInt8>(1, repeat:)` —— 构造式来自基线 `router.cj:9 Array<Byte>(4096, repeat: 0)`，`UInt8` 本身另有官方文档取证（本文件 286 行）✅；③ 元组 `_` 解构 —— 基线确有，但注释里的**行号引用是错的**（写 126，实际 322） | ✅ 修正该行号。**教训**：文档里刚立完「注释引用风险编号必须存在于风险表」的纪律，自己的代码注释就有一条行号失效 —— 引用一旦写进注释就必须可核验，否则它比没有引用更坏 |
 | 2026-11-23 | P1 提交前清理 | `.gitignore` 的 Playwright 段落里 `frontend-web/playwright-report/` 被重复写了两遍（本会话两轮各自加过一次，互不知情） | ✅ 去重并给 `.pw-browsers/` 补上「仅当把 `PLAYWRIGHT_BROWSERS_PATH` 指进仓库时才会出现」的说明；`*.log` 早已在忽略列表内，故历史 `e2e-run-*.log` 从未进过暂存区（`git status -uall` 复核通过） |
+| 2026-11-23 | **P2.1** | 后端落地员工批量导入：`employee_controller.cj` +约 530 行（`parseCsvInto` 手写 RFC4180 子集 / `csvSplitRows` / `csvStripBom` / `csvRowIsBlank` / `csvColIndex` / `csvCell` / `strRuneLen` / `isAllDigits` / `strHas` / `isValidYmd` / `empImportGender` / `empImportStatus` / `validateImportRow` / `importFailJson` / `empImportHeader` / `empImportCols` / `handleEmployeeImport` / `doEmployeeImport` / `importResultJson` / `persistImport`），`main.cj` 注册 `POST /api/v1/employees/import`（**必须排在 `segs.size == 4` 的员工详情分支之前**） | ⚠️ 代码完成；无 SDK，未编译未运行（L-IMP-1） |
+| 2026-11-23 | P2.1 契约取证 | 写实现前先把**能用的 API 边界**钉死：`queryRows` 只有 1 个参数、`match` 必须写 `case Some(x) =>`、`String.size` 对非 ASCII 无基线样本、`String.contains` / `JsonKind.JsArray` / `asArray` / `ArrayList` 下标赋值 / 数组字面量构造 / 单引号字符串 / `\|>` 管道 在基线**零先例** | ✅ 一律改走已确证构造：子串存在性用 `replace` 长度差（`strHas`）、字节串用 `String.fromUtf8(ArrayList<UInt8>.toArray())`、特殊字符用命名字节常量、长度一律 `toRuneArray().size` |
+| 2026-11-23 | ★ P2.1 抓到真实缺陷 | 初版长度校验写成 `empNo.size > 32` / `name.size > 64` | ✅ `String.size` 是 **UTF-8 字节数**（`truncateUtf8` 正是靠它做字节截断），中文姓名 1 字 3 字节 ⇒ 64 的上限实际只允许 **21 个汉字**，MySQL `VARCHAR(64)` 却按字符计长。全部改走 `strRuneLen()`，并在单测里用 `"张三".toArray().size == 6` 把这条口径钉住 |
+| 2026-11-23 | P2.1 单测 | 新建 `employee_import_test.cj`：**35 个 `@TestCase`**、只测纯函数（不碰 HttpContext/DB），辅助函数刻意**不复用被测解析器**（`impSplit` 手写扫描而非 `String.split`，避免循环论证），风格对齐 `payroll_controller_test.cj` | ⚠️ 未运行；期望值全部经 node 独立复算 |
+| 2026-11-23 | ★ P2.1 期望值复核 | 用 node **按同一算法复刻** `parseCsvInto/csvSplitRows/csvStripBom`，对 18 组输入逐条打印 `rows/counts/lines`，再回填断言 | ✅ 当场纠出 **5 处错断言**：`impParse("\r\n")` 实为 1 行（空行本身是记录）、`"a\r\n\r\nb\r\n"` 实为 3 行、`He said "hi"` 是 12 字符不是 11、缺列时报错数是 11 不是 12、`csvColIndex` 只 trim 表头不 trim 列名（`" 岗位 "` 应为 -1）。**教训：无法编译时，「我以为的语义」与「代码的语义」的偏差只能靠独立实现去撞，肉眼读第二遍几乎全绿** |
+| 2026-11-23 | P2.1 结构自检 | 写临时 node 脚本做 3 项静态体检：`.cj` 无 BOM 且 UTF-8 可往返、花括号配平（跳过字符串/注释）、测试文件里每个被调用的标识符都有定义处 | ✅ 35 用例 / 括号 depth=0 min=0 / 类体内 `let·var` 成员 0 处 / 未定义调用仅剩 std 方法（`fromUtf8·toArray·toRuneArray·toString`，均已取证） |
+| 2026-11-23 | P2.1 行为决策 | 解析器忠实 RFC4180 会把空行变成「1 个空字段的记录」，直接送去校验会刷出 6 条必填错误 | ✅ 新增 `csvRowIsBlank`，在 `doEmployeeImport` 里**先剔空行再算 `total` 与 500 上限**，且行号仍取自原始 `rowLines`（剔除后第 3 行照旧报 3）。语义与策略分离：解析器不改，策略在调用方 |
 
 ---
 
@@ -263,6 +280,10 @@
 | L-SMOKE-1 | `scripts/api-smoke.ps1` **只对本地桩执行过，从未对真实后端跑过**（无 SDK，后端起不来） | 「112 通过」证明的是**脚本逻辑自洽且能抓错**，不等于**当前后端实现无缺陷** | 已在脚本文件头显式声明此前提；SDK 就位后首件事即 `powershell -File scripts\api-smoke.ps1` 对真实 8080 复跑，届时若出现失败，**默认判为后端缺陷**（脚本的反检能力已由 5 类注错证明） |
 | L-SMOKE-2 | 用于验证脚本的 node 桩**刻意不入库** | 无自动化回归网可长期复用 | 桩是「按我读到的源码写的」，若字段名记错会与脚本**同时错而自洽**；长期 fixture 更会与真实 API 漂移并反过来误导。故只在会话内使用、验毕即删，契约的唯一权威来源是 `backend-cangjie/src` 源码本身 |
 | L-SMOKE-3 | 脚本对**打卡幂等 / 登录限流 / 余额不足**等状态相关分支采取「宽容 + SKIP」策略 | 这些路径不会稳定产出断言，覆盖率有水分 | 宁可 SKIP 也不假绿；SKIP 数在汇总里单独打印，便于识别「本次实际验证了多少」 |
+| L-IMP-1 | **P2.1 的导入接口与其 35 个单测同样未经 `cjc` 编译/运行**（无 SDK） | 语法或类型错误只在有 SDK 的机器上暴露；「单测全绿」目前只是**静态期望值一致**，不是执行结果 | 缓解：①每个断言的期望值都用 node 按同一算法**独立复算**过（解析器/行号/字节长度逐条核对）；②只使用基线已出现过的语法构造；③新增 API 依赖（`String.replace`/`toRuneArray`/`toArray`/`String.fromUtf8`）均回基线取证。根治：SDK 就位后 `cjpm test` 首跑 |
+| L-IMP-2 | 导入的**传输契约偏离了第四节的原始描述**（CSV 文本交后端解析，而非前端解析后传 JSON 数组） | 若后来者按第四节旧文实现前端，会打出后端不认的 body 结构 | 已在第四节就地改写契约 + 在 `employee_controller.cj` 的 P2.1 段头注释里写明理由；P2.2 必须以「P2.1 契约」小节为唯一依据 |
+| L-IMP-3 | 批量写库把 `START TRANSACTION` / 多值 `INSERT` / `INSERT…SELECT` / `COMMIT` 拼成**一条 SQL 文本**交给 `executeSql` | 依赖 mysql 客户端对多语句批处理的默认行为；若服务端配置（如 `NO_BACKSLASH_ESCAPES`）异常，可能整批失败或字段错位 | 失败路径返回 500 + `lastDbErrorMessage()` 且**不落半批**；`sqlStr`/`sqlNullableStr` 沿用基线同一转义口径，未新造转义逻辑 |
+| L-IMP-4 | 导入时**静默跳过全空行**（不计入 `total`，也不报错） | 用户若想确认「模板里有多少空行」得不到提示 | 有意取舍：Excel 另存为常带尾随空行，若按数据行校验会一次报出 6 条必填错误并淹没真错误。判据 `csvRowIsBlank` 已单独建单测锁住语义 |
 
 ---
 
@@ -299,6 +320,23 @@
 **含裸 `$` 的字符串字面量**（如 `"$"`、`"a$b"`）与 **`"$${X}"` 试图转义 `$` 的写法** —— 已用 `git grep -E '\$[^{]' 6e79923 -- backend-cangjie/src` 证实**基线里 `$` 后面永远紧跟 `{`**，即整个仓库从未出现过一个不启动插值的 `$`。因无法排除仓颉支持 `"$ident"` 简写插值，这类写法词法风险不可控 → 需要裸 `$` 时用 `String.fromUtf8(Array<UInt8>(1, repeat: 0x24))` 逐字节构造（见 `crypto_util.cj` 的 `PWD_SEP`）；
 **`str(x)` 转字符串函数**（未证实存在 → 一律用插值 `"${x}"`）；
 **`eprintln`**（基线未出现 → 统一 `println`）。
+
+**P2.1 新增的 5 条取证结论（本轮 `git grep` 基线 `6e79923` 所得，非推测）**：
+- **`ArrayList` 下标赋值**（`arr[i] = v`）与 **`arr.set(i, v)`**：基线**零先例**。
+  基线唯一的下标赋值只出现在 `Array<UInt8>` 上（`crypto_util.cj:72,96,105`、`jwt_util.cj:264-266`），
+  而 `Array` 与 `ArrayList` 是两个类型，前者的能力不能推给后者 ⇒ 一律禁用，改为**逐个 `add`** 造定长表。
+- **构造特殊字节串的标准做法**：`ArrayList<UInt8>()` + `add()` + `.toArray()` + `String.fromUtf8(...)`
+  有基线先例（`employee_controller.cj:480`、`mysql_pool.cj:241`）；命名字节常量写法见
+  `mysql_pool.cj:228-232`（`let byteDollar: UInt8 = 0x24`）⇒ 测试造 BOM / 全角数字一律走这条路径。
+- **`String.split` 的「空分段是否保留」无佐证样本**：基线两处调用（`jwt_util.cj:93`、`crypto_util.cj:180`）
+  的输入分段**必然非空**，语义悬而未决 ⇒ 尺子类函数（`impSplit`）改手写 `toRuneArray()` 扫描；
+  被测代码里凡依赖 split 空段语义的判断（如 `email.split("@").size < 2`）一律替换为
+  `strHas(s, sub)`（用 `s.replace(sub, "").size != s.size` 表达，两侧均为已证实 API）。
+- **`String.size` 对非 ASCII 究竟是字节数还是字符数，基线无可佐证断言** ⇒
+  字节口径只用 `"x".toArray().size`（`Array<UInt8>` 元素数 = 字节数，`truncateUtf8` 已确证同口径），
+  字符口径只用 `strRuneLen()` = `toRuneArray().size`；**长度校验必须走 rune 口径**
+  （MySQL `VARCHAR(n)` 按字符计长，按字节会把中文姓名上限缩水约 1/3）。
+- **`String.contains` 零先例** ⇒ 子串存在性统一走上述 `strHas`。
 
 **单元测试框架（1.0.5 官方逐字，本轮新证实）**：
 - **无需任何 import**（官方：「单元测试框架 API 已在 `std` 的 `unittest` 包、宏在 `std.unittest.testmacro` 包，不需要在测试文件中显式导入」）；若要显式写则两行成对：`import std.unittest.*` + `import std.unittest.testmacro.*`。
@@ -503,7 +541,7 @@
 | `LOGIN_BLOCK_SECONDS` | 900 | 封锁时长（测试约束 `≥ LOGIN_WINDOW_SECONDS`，否则「解封即重开」） |
 | `LOGIN_MAX_KEYS` | 4096 | 内存表上限，表满时**复用下标 0 槽位** |
 
-### 12.9 后端单测清单（P1.1 已完成部分）
+### 12.9 后端单测清单
 
 | 文件 | 用例数 | 覆盖对象 |
 | --- | --- | --- |
@@ -514,13 +552,61 @@
 | `controller/payroll_controller_test.cj` | 32 | calculateTax 分档、算薪向量、payrollRowToJson |
 | `controller/performance_controller_test.cj` | 30 | mapPerformanceGrade、perfRowToJson（含 golden JSON） |
 | `middleware/rate_limit_test.cj` | 39 | 常量契约、纯函数、expiresAt、全表状态机 |
-| **合计** | **188** | |
+| — **P1.1 小计** | **188** | |
+| `controller/employee_import_test.cj` | 35 | parseCsvInto / csvSplitRows / csvStripBom / csvRowIsBlank / csvColIndex / csvCell / strHas / strRuneLen / isAllDigits / isValidYmd / empImportGender / empImportStatus / empImportCols / validateImportRow / importFailJson / importResultJson / empImportHeader |
+| **合计** | **223** | |
+
+> P2.1 的 35 个用例同样**从未被 `cjpm test` 执行过**（L-CJ-1），其期望值由 node 独立实现
+> 复算固化，见 12.10；风险登记见 L-IMP-1。
 
 > 未覆盖并已诚实记录：`clientIp(ctx)` 仍无**直接单测**（构造 `HttpContext` 的可行性未证实）—— P1.2 已交付的
 > `scripts/api-smoke.ps1` 从**行为侧**间接覆盖其后果（登录限流键 `username@ip`：脚本用独立用户名 `no_such_smoke_user`
 > 只发 1 次错误口令，避免污染真实账号），但「XFF 解析是否正确」这条仍未断言，见 L-SMOKE-1；
 > 各 controller 的 handler 依赖 `queryRows`（需真库）；`expiresAt` 相关的「窗口/封锁到期」分支
 > 因**无法注入时钟**而不测，只测同一秒内必然成立的状态迁移。
+
+### 12.10 CSV 解析 ground truth（P2.1，node 独立实现复算）
+
+> 期望值不是手推的：用一份 node 复算脚本按 `parseCsvInto` / `csvSplitRows` / `csvStripBom`
+> 的**同一套状态机语义**在 node 里重写一遍，18 组输入一次性输出 `rows / counts / lines`。
+> 脚本本身是临时物（位于系统 Temp，不入库），本表是其结论的固化，防止后续改动悄悄漂移语义。
+> `\r\n` = CRLF，`\n` = LF，`\r` = CR；BOM = `EF BB BF`。
+
+| # | 输入 | rows | counts | lines | 首行起各行内容 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `工号,姓名\r\nA1,张三\r\nA2,李四\r\n` | 3 | 2,2,2 | 1,2,3 | `[工号,姓名]` `[A1,张三]` `[A2,李四]` |
+| 2 | `h1,h2\r\na,b\r\nc,d\r\n` | 3 | 2,2,2 | 1,2,3 | `[h1,h2]` `[a,b]` `[c,d]` |
+| 3 | `h1,h2\r\na,b`（无尾换行） | 2 | 2,2 | 1,2 | `[h1,h2]` `[a,b]` |
+| 4 | `h\na\nb\n`（纯 LF） | 3 | 1,1,1 | 1,2,3 | `[h]` `[a]` `[b]` |
+| 5 | `h\ra\rb\r`（纯 CR） | 3 | 1,1,1 | 1,2,3 | `[h]` `[a]` `[b]` |
+| 6 | `h1,h2\r\n"技术,研发部",x\r\n` | 2 | 2,2 | 1,2 | `[h1,h2]` `[技术,研发部, x]` |
+| 7 | `a,"b,c",d\r\n` | 1 | 3 | 1 | `[a, b,c, d]` |
+| 8 | `h\r\n"He said ""hi"""\r\n` | 2 | 1,1 | 1,2 | `[h]` `[He said "hi"]`（12 字符） |
+| 9 | `h1,h2\r\n"line1\nline2",tail\r\nend,x\r\n` | 3 | 2,2,2 | **1,2,4** | `[h1,h2]` `[line1\nline2, tail]` `[end,x]` |
+| 10 | `h1,h2\r\n"a\nb",c\r\nd,e\r\n` | 3 | 2,2,2 | **1,2,4** | `[h1,h2]` `[a\nb, c]` `[d,e]` |
+| 11 | `BOM + 工号,姓名\r\nA1,B\r\n` | 2 | 2,2 | 1,2 | `[工号,姓名]` `[A1,B]`（BOM 已剥，表头可匹配） |
+| 12 | ``（空串） | 0 | — | — | 无记录 |
+| 13 | `\r\n`（仅一个换行） | **1** | 1 | 1 | `[""]` ← 空行本身就是一条记录 |
+| 14 | `only` / `only\r\n` | 1 | 1 | 1 | `[only]`（尾换行不额外产行） |
+| 15 | `a,b,\r\n` | 1 | 3 | 1 | `[a, b, ""]`（尾逗号产空字段） |
+| 16 | `,,\r\n` | 1 | 3 | 1 | `["", "", ""]` |
+| 17 | `a\r\n\r\nb\r\n` | **3** | 1,1,1 | 1,**2**,3 | `[a]` `[""]` `[b]` ← 中间空行占一条 |
+
+单元值（同口径）：
+
+| 表达式 | 结果 | 说明 |
+| --- | --- | --- |
+| `strRuneLen("He said \"hi\"")` | 12 | 2+1+4+1+1+2+1 |
+| `csvStripBom("abc")` | `"abc"`，3 字节 | 无 BOM 原样返回 |
+| `csvStripBom(BOM + "abc")` | `"abc"`，3 字节 | BOM 剥离 |
+| `csvStripBom("a" + BOM)` | 4 字节 | **BOM 不在开头就不是 BOM**，原样保留 |
+| `impBom()` | 3 字节 / 1 字符 | 断言一律用 `toArray().size`，不用 `String.size` |
+| 全角 `１` | 3 字节 / 1 字符 | `isAllDigits` 必须为 `false` |
+| `"张三"` | 6 字节 / 2 字符 | 长度校验走 rune 口径，否则上限缩水到 1/3 |
+
+> 第 13/17 组是本轮**唯一由复算推翻手写期望**的地方：最初按「空行不产记录」写断言，
+> 复算证明解析器为 1 条 / 3 条。结论是语义留在解析器（忠实还原 CSV），
+> 策略放到调用方（`doEmployeeImport` 用 `csvRowIsBlank` 剔空行），见 L-IMP-4。
 
 ---
 

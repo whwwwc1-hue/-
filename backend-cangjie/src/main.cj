@@ -136,6 +136,9 @@ func dispatchRequest(ctx: HttpContext): Unit {
         // Employee routes
         if (path == "/api/v1/employees" && method == "GET") { handleEmployeeList(ctx); return }
         if (path == "/api/v1/employees" && method == "POST") { handleEmployeeCreate(ctx); return }
+        // 批量导入必须排在 `segs.size == 4` 的员工详情分支之前：
+        // /api/v1/employees/import 同为 4 段，只是最后一段不是数字 ID。
+        if (path == "/api/v1/employees/import" && method == "POST") { handleEmployeeImport(ctx); return }
         if (segs.size == 4 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "employees") {
             let id = parseIntId(segs[3])
             if (id > 0 && method == "GET") { handleEmployeeDetail(ctx, id); return }
