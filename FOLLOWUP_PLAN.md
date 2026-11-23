@@ -898,3 +898,33 @@ git config --local https.proxy http://127.0.0.1:7890
 分支推送不满足；`pull_request` 无分支过滤，因此**开 PR 就会首跑**。
 入口：`https://github.com/whwwwc1-hue/-/pull/new/trae/hrms-work`（本会话无 `gh` CLI、也不擅自取用凭据管理器里的 token 代发 PR）。
 闭合条件：Actions 出现该 PR（或 main）的首个 run，且 `frontend`/`e2e` 两个 job 为 success；`backend` job 允许 skipped（T0.1 仍阻塞）。
+
+### 13.7 推送分支订正：`trae/hrms-work` → `zc`（2026-11-23，用户指示）
+
+用户纠正：「分支提交错了，你把你加的分支删掉，提交到 zc 这个分支」。执行过程与实测结果：
+
+```
+git stash push -m "P2.4 WIP (backend monthly-summary)"        # 当时有 2 个未提交的 WIP 文件
+git checkout -b zc main                                       # 本地新建 zc，起点 = main(f57dfb9)
+git rebase --onto origin/zc --root zc                         # 两段历史无共同祖先，用 --root 全量重放
+git checkout --theirs README.md ; git add README.md ; git rebase --continue
+git push -u origin zc                     => 1bdde7e..3db4681  zc -> zc   （快进，非 force）
+git push origin --delete trae/hrms-work   => - [deleted]  trae/hrms-work
+```
+
+关键事实（均为命令实测，非推断）：
+
+| 项 | 实测 |
+| --- | --- |
+| `origin/zc` 原 tip | `1bdde7e` "Initial commit"，树里**只有** `README.md`（2 行占位） |
+| 与本地历史的关系 | `git merge-base HEAD origin/zc` 为空 ⇒ **无共同祖先**（两条独立 root） |
+| 重放的提交数 | 9（`6e79923..f57dfb9` → `fb57e1b..3db4681`，hash 全部变化） |
+| 冲突 | 仅 1 处：`README.md` add/add，保留本地完整版（内容远多于占位版） |
+| 重放后内容是否等价 | `git diff --stat f57dfb9 zc` 输出**为空** ⇒ 树完全一致，无内容丢失 |
+| 是否快进 | `git merge-base --is-ancestor origin/zc zc` 退出码 0 ⇒ 推送为 fast-forward，**无需 `--force`** |
+| 是否动过主干 | 否。`origin/main` 仍是 `c76f07f`，`backend-cangjie/.env` 未被删除 |
+
+**本地分支现状**：工作分支改为 `zc`（upstream = `origin/zc`）；本地 `main` 保留在旧 hash `f57dfb9` 作为回退点，
+其 upstream 曾由 13.6 的 `-u` 指向已删除的 `origin/trae/hrms-work`，需知悉这一点（不影响 `zc` 的推送）。
+
+L-CI-1 的 PR 入口随之改为 `https://github.com/whwwwc1-hue/-/pull/new/zc`，其余闭合条件不变。
