@@ -4,6 +4,14 @@ frontend-web/dist/
 backend-cangjie/target/
 backend-cangjie/.temp/
 
+# Playwright E2E artifacts
+frontend-web/test-results/
+frontend-web/playwright-report/
+frontend-web/blob-report/
+frontend-web/.playwright-mcp/
+# 仅当把 PLAYWRIGHT_BROWSERS_PATH 指到仓库内时才会出现（api-smoke.ps1 用 ../tmp_sql）
+frontend-web/.pw-browsers/
+
 # Local env & per-query SQL scratch files (never commit real credentials)
 backend-cangjie/.env
 backend-cangjie/tmp_sql/

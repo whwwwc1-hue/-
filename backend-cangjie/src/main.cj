@@ -233,15 +233,15 @@ main(): Int64 {
 
     // P0.3 fail-fast：严格模式下带着不合规的密钥启动是不允许的。
     if (globalConfig.strictEnv && globalConfig.securityWarnings().size > 0) {
-        eprintln("[FATAL] STRICT_ENV=1，但存在安全配置问题，拒绝启动。请修复上述告警后重试。")
+        println("[FATAL] STRICT_ENV=1，但存在安全配置问题，拒绝启动。请修复上述告警后重试。")
         return 1
     }
 
     try {
         ensureTempDir()
     } catch (e: Exception) {
-        eprintln("[FATAL] 临时目录初始化失败: ${e.message}")
-        eprintln("        请设置 TMP_SQL_DIR 指向一个纯英文、可写的目录，例如 D:\\hrms_tmp")
+        println("[FATAL] 临时目录初始化失败: ${e.message}")
+        println("        请设置 TMP_SQL_DIR 指向一个纯英文、可写的目录，例如 D:\\hrms_tmp")
         return 1
     }
 
@@ -249,16 +249,16 @@ main(): Int64 {
         seedDefaultUsers()
     } catch (e: Exception) {
         // P0.1 之后数据访问层不再静默吞异常，这里把根因直接摊给开发者。
-        eprintln("[WARN] 初始化演示账号失败：${e.message}")
-        eprintln("       可能原因：MySQL 未启动 / 账号口令错误 / ${globalConfig.dbName} 未建库。")
+        println("[WARN] 初始化演示账号失败：${e.message}")
+        println("       可能原因：MySQL 未启动 / 账号口令错误 / ${globalConfig.dbName} 未建库。")
         let (dbUp, dbInfo) = dbPing()
         if (dbUp) {
-            eprintln("       连通性探测：正常（${dbInfo}），请确认 hrms_db 中已建表。")
+            println("       连通性探测：正常（${dbInfo}），请确认 hrms_db 中已建表。")
         } else {
-            eprintln("       连通性探测：失败（${dbInfo}）。")
+            println("       连通性探测：失败（${dbInfo}）。")
         }
-        eprintln("       建库脚本：sql/init_db.sql；Windows 可用 scripts/init-db.ps1")
-        eprintln("       服务仍会启动，但所有依赖数据库的接口将返回 500。")
+        println("       建库脚本：sql/init_db.sql；Windows 可用 scripts/init-db.ps1")
+        println("       服务仍会启动，但所有依赖数据库的接口将返回 500。")
     }
 
     let server = ServerBuilder()

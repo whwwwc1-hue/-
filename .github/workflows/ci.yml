@@ -1,0 +1,154 @@
+name: CI
+
+# 触发：主干推送、PR、以及手动。不设 paths 过滤 —— 仓库很小，
+# 且 sql/ 与 backend-cangjie/ 的改动也需要知道前端契约没被跑坏。
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的旧运行直接取消，避免抢 Playwright 的 5173 端口与额度。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────── 前端静态质量
+  frontend:
+    name: Frontend · typecheck / lint / build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 与本地验证环境同大版本（本机 v22.19.0）。
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend-web/package-lock.json
+
+      # npm ci 而非 npm install：lock 文件不一致时应当**构建失败**，而不是静默改 lock。
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (vue-tsc --noEmit)
+        run: npm run typecheck
+
+      # package.json 的 lint 脚本不带 --max-warnings，CI 里必须收紧到 0，
+      # 否则警告会一路攒到没人愿意修。
+      - name: Lint (eslint, warnings are errors)
+        run: npx eslint . --max-warnings 0
+
+      # build 脚本内部已再跑一次 vue-tsc，这里要的是产物与既存 chunk 体积警告可见。
+      - name: Build (vite)
+        run: npm run build
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-web/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  # ────────────────────────────────────────────────────── 前端 E2E（Playwright）
+  e2e:
+    name: Frontend · Playwright E2E (42 specs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: frontend
+    defaults:
+      run:
+        working-directory: frontend-web
+    env:
+      # playwright.config.ts 默认 channel 是 'msedge'（为迁就本机只有 Edge 的处境）。
+      # CI 上显式改为自带 chromium，配合下面的 install 步骤，不依赖 runner 预装的浏览器。
+      E2E_CHANNEL: chromium
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend-web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install browsers
+        run: npx playwright install --with-deps chromium
+
+      # 不启真实后端：E2E 默认走 e2e/support/mock-server.ts 的有状态内存 mock
+      # （29 个接口，契约逐字段取自 backend-cangjie/src），fixture teardown 断言
+      # unmatched 为空，前端一旦调用未实现的接口就当场失败，防「测试绿但契约已漂」。
+      # 直连真实后端的 E2E_REAL=1 路径需要 SDK + MySQL，见 backend 作业的启用条件。
+      - name: Run E2E
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend-web/playwright-report
+            frontend-web/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────── 后端（默认关闭，见注释）
+  #
+  # 为什么不默认跑：本机与既有环境**从未装过仓颉 SDK**（FOLLOWUP_PLAN 的 L-CJ-1），
+  # 全部后端 .cj 改动都没经过 cjc 编译。此时候选做法都有问题，逐一排除：
+  #   ✗ 写死一个 SDK 下载地址 -> 未经核实，大概率长期 404，只是把假绿换成常红。
+  #   ✗ continue-on-error: true -> 永远绿，等于给后端装上「看起来有 CI」的假象。
+  #   ✗ 直接删掉这个作业 -> 188 个 @TestCase 与 api-smoke.ps1 从此无人提及。
+  # 现在这样：默认 **skipped**（灰点，状态诚实），要启用就在仓库 Settings → Secrets
+  # and variables → Actions → Variables 里新建 `BACKEND_CI_ENABLED=true`，
+  # 并把下面占位的安装步骤换成**你核实过**的真实安装方式。
+  # 在 SDK 真正就位前，宁可让后端保持「无 CI」这个已知状态，也不要一条假绿的流水线。
+  backend:
+    name: Backend · cjpm build / test (disabled by default)
+    if: vars.BACKEND_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend-cangjie
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate Cangjie SDK
+        run: |
+          if ! command -v cjpm >/dev/null 2>&1; then
+            echo "::error::Runner 上没有 cjpm。请把本作业的 SDK 安装步骤补全为你核实过的真实方式后再启用 BACKEND_CI_ENABLED。"
+            exit 1
+          fi
+          cjpm --version || true
+
+      # TODO(需人工核实): 在此接入真实的 SDK 安装/缓存步骤。留空即依赖上一步的检查失败。
+
+      - name: Build
+        run: cjpm build --release
+
+      - name: Unit tests (188 @TestCase)
+        run: cjpm test
+
+      # 故意留红：scripts/api-smoke.ps1 需要「已启动的后端 + hrms_db」，本作业还没接入
+      # 这两样。宁可在这里明确失败，也不要让「冒烟没跑」看起来像「冒烟通过」。
+      # 首次真跑时若失败，默认判为**后端实现缺陷**（脚本的抓错能力已由 5 类注错反检证明）。
+      - name: API smoke (8 sections / 112 assertions) — NOT WIRED YET
+        run: |
+          echo "::error::api-smoke 未接入：需要先在本作业起 MySQL（导入 sql/init.sql）并以 start-backend.ps1 拉起 8080，再用 pwsh 执行 scripts/api-smoke.ps1。缺任何一环都不要摘掉这里的 exit 1。"
+          exit 1

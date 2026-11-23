@@ -100,18 +100,31 @@
 
 ## 三、任务包 P1：测试与 CI（对应指南工作包 A）
 
-- [ ] **P1.1 后端纯函数单测**（`cjpm test`，仓颉 `@Test`）——优先只测**不需要数据库**的纯逻辑：
+- [x] **P1.1 后端纯函数单测**（`cjpm test`，仓颉 `@Test`）—— **已完成 7 个测试文件 / 188 个 `@TestCase`，清单与期望值见第十二节 12.9**。
+      ⚠️ 因本机无 SDK（L-CJ-1），这 188 个用例**从未被真正执行过**；质量靠两条纪律兜底：
+      ①新语法必须先 `git grep` 基线同款用法；②数值断言逐条手算，取整未知处一律降级为容差或量尺（12.5）。
+      优先只测**不需要数据库**的纯逻辑：
   - `crypto_util`：盐生成、哈希-校验往返、错误密码拒绝。
   - `jwt_util`：签名校验、篡改拒绝、过期拒绝。
   - `payroll_controller` 的个税分段 `calculateTax`（3%/10%-210/20%-1410/25%-2660 四档边界值）。
   - 绩效分数→等级→系数映射（90/80/70/60 边界与 `<60`）。
   - `router.cj` 路径分段与 QueryString URL 解码。
   - 为使后两项可测，需把算薪/评级纯函数从控制器里**提为独立函数**（行为不变的重构）。
-- [ ] **P1.2 接口级集成测试脚本**：`scripts/api-smoke.ps1` 覆盖 4 角色登录、越权 `403`、打卡、审批扣年假、生成工资、工资条金额核对，可用 curl 断言，作为无 CI 时的手工回归。
-- [ ] **P1.3 前端 Playwright E2E**：4 角色登录与侧边栏菜单隔离、审批弹窗提交、薪资生成后「我的工资条」金额一致。
-- [ ] **P1.4 GitHub Actions**：`.github/workflows/ci.yml`，前端 `npm ci && npm run typecheck && npm run build`；后端在 SDK 可用时 `cjpm build && cjpm test`（可先只跑前端 job，避免假绿）。
+- [x] **P1.2 接口级集成测试脚本**：`scripts/api-smoke.ps1` 覆盖 4 角色登录、越权 `403`、打卡、审批扣年假、生成工资、工资条金额核对，作为无 CI 时的手工回归。✅ **已完成并经桩验证**：8 个章节 / **112 个断言点**，对「正确后端」桩跑出 `112 通过 / 0 失败 / 0 跳过`（exit 0）；对 5 类人为注入的错误**全部变红**（exit 1）；服务未启动时 exit 2 并给出可操作提示。详见第九节与 `scripts/api-smoke.ps1` 文件头说明。
+- [x] **P1.3 前端 Playwright E2E**：4 角色登录与侧边栏菜单隔离、审批弹窗提交、薪资生成后「我的工资条」金额一致。
+      ✅ **已完成并经真实浏览器验证**：5 个 spec（auth 10 / rbac-menu 9 / attendance 8 / payroll 8 / approval 7）= **42 用例**，`--workers=1` 下 **42 passed (1.1m)**；`typecheck` / `eslint --max-warnings 0` / `build` 三连 exit 0。
+      拦截层是**有状态内存 mock**（29 个接口，逐字段回 `backend-cangjie/src` 源码取契约），fixture teardown 断言 `unmatched == []` —— 前端发起但 mock 未实现的请求会直接让用例失败，这是防「测试通过但契约已漂移」的闸门。
+      金额一致性实证：emp01 生成后「我的工资条」实发 `￥15796.54`，调项后 `￥16620.26`，与核算中心列表逐分对齐（非硬编码，由 mock 按 `calculateTax` 同口径现算）。
+      过程中修掉一个**真实前端缺陷**（L-FE-5 冷启动画像过期）并消除一个**既存假绿**（payroll 精确数组断言），详见第九、十节。
+- [x] **P1.4 GitHub Actions**：`.github/workflows/ci.yml`，前端 `npm ci && npm run typecheck && npm run build`；后端在 SDK 可用时 `cjpm build && cjpm test`（可先只跑前端 job，避免假绿）。
+      ✅ **已完成**：[.github/workflows/ci.yml](./.github/workflows/ci.yml)（已用 js-yaml 解析校验，3 个 job）。
+      `frontend`：`npm ci` → `typecheck` → `eslint --max-warnings 0` → `build` → 上传 `dist`。
+      `e2e`：`npm ci` → `playwright install --with-deps chromium` → `npx playwright test`，失败时上传 `playwright-report`/`test-results`。
+      `backend`：**默认 skipped**，`if: vars.BACKEND_CI_ENABLED == 'true'`。刻意不写未经核实的 SDK 下载地址、也不用 `continue-on-error` —— 两者都会把「后端无 CI」伪装成绿。文件内已逐条写明排除理由与启用前置条件。
+      ⚠️ 关键实证：CI 用 `E2E_CHANNEL=chromium` 而非本地默认的 `msedge`。这条**已在本机按 CI 等价条件跑过**（`CI=true` ⇒ `workers=2` + `reuseExistingServer:false` 自建 vite dev + Playwright 自带 chromium）：**42 passed (38.8s)**。
 
-**验收**：CI 绿；单测覆盖全部金额与权限相关纯函数；越权与算薪金额有自动化断言。
+**验收**：前端 CI 绿；单测覆盖全部金额与权限相关纯函数；越权与算薪金额有自动化断言。
+      ⚠️ 诚实修正原验收口径：「CI 绿」目前**只覆盖前端**（typecheck/lint/build/42 个 E2E）。后端 188 个 `@TestCase` 与 `api-smoke.ps1` 的 112 个断言点**仍无执行环境**（L-CJ-1），对应 job 呈 skipped 而非 passed。
 
 ---
 
@@ -180,6 +193,45 @@
 | 2026-11-23 | P0.3 | 新增 [crypto_util.cj](./backend-cangjie/src/common/crypto_util.cj)(217行) / [rate_limit.cj](./backend-cangjie/src/middleware/rate_limit.cj)(244行)；重写 [jwt_util.cj](./backend-cangjie/src/common/jwt_util.cj)(154行) 为 HS256；`auth_controller` 接限流+静默升级哈希+续签；`response.cj` 加 `X-Renewed-Token` 与 Expose-Headers；前端 `adoptRenewedToken` | ⚠️ 后端**未编译**；前端三连验证全绿（tsc/lint/build exit 0） |
 | 2026-11-23 | P0.3 | 修正 `handleAuthMe` 第一版把 `renewToken` 塞进 `data` 的错误（破坏前端 `refreshProfile` 扁平契约）| ✅ 改为响应头下发，契约零破坏 |
 | 2026-11-23 | P1.1 前置 | 考证仓颉官方 `unittest` 框架（此前多轮失败） | ✅ **突破**：取得 1.0.5 官方逐字规范，见第十一节 |
+| 2026-11-23 | P0.3 自查 | 写单测前对新增 `.cj` 做静态可编译性复核，发现并修复 **3 个真实缺陷** | ✅ ① `crypto_util.cj` 用了 `String.fromUtf8`/`Int64.tryParse` 却漏 `import std.convert.*`（基线原版不需要，重写后必然编译失败）→ 补 import；② `hashPassword` 的 `"cj1$${X}$..."` 裸 `$` 字面量属未证实词法 → 改为 `String.fromUtf8(Array<UInt8>(1, repeat: 0x24))` 构造 `PWD_SEP` + `+` 拼接；③ `str(PWD_ITERATIONS)` 用了未经证实的 `str()` → 改插值 `"${...}"` |
+| 2026-11-23 | P0.3 自查 | 用 `git grep -E '\$[^{]' 6e79923 -- backend-cangjie/src` 反查基线 | ✅ **返回空集** → 证明基线中 `$` 永远紧跟 `{`，故裸 `$` 字面量确属未证实写法。据此建立「拿不准就用 `git grep <写法> 6e79923` 反查基线」的固定手法 |
+| 2026-11-23 | L-CJ-2 | `main.cj` 9 处 `eprintln(` → `println(` | ✅ 风险关闭（`println` 为基线大量使用的已证实 API） |
+| 2026-11-23 | 事故 | PowerShell `(Get-Content -Raw) -replace ... \| Set-Content -Encoding utf8` 给 `main.cj` **加了 UTF-8 BOM**（Windows PowerShell 5.1 的 `utf8` = 带 BOM），BOM 位于 `package` 之前会破坏词法分析 | ✅ 用 `[IO.File]::ReadAllText` + `Substring(1)` + `UTF8Encoding($false)` 去 BOM，复验首 4 字节 = `112,97,99,107`（"pack"）。**纪律：含 CJK 的源文件一律用 .NET `WriteAllText` + 无 BOM 编码，禁用 `Set-Content -Encoding utf8`** |
+| 2026-11-23 | L-CJ-3 复核 | `git grep -n -e '\${if (' 6e79923 -- backend-cangjie/src` | ✅ **推翻上一轮结论**：基线有 **4 处**同写法而非 1 处，属「已证实可用」→ 判定为**误报**，决定**不回改基线**（零收益 + 有回归风险）。第十一节相应条目已从「不可用」移入「已证实可用」 |
+| 2026-11-23 | 取证 | 用 .NET `SHA256`/`HMACSHA256` 离线算出全部测试期望值 | ✅ 拒绝凭记忆写常量；但**本轮发现期望值表本身有错**，见下两行 |
+| 2026-11-23 | 取证纠错 | `WebFetch` RFC 4231 原文逐字核对 HMAC 用例 | 🔴 **推翻自己上一轮的记录**：RFC 4231 **只有 7 个 Case**，此前按记忆写的「Case7 = …Hash Key First」实为 **Case 6**；而所谓「Case8 = `6355ac22…`」**纯属编造，官方无此用例**，已从所有待写入代码中删除。正确 Case 7 = 131×`0xaa` key + 152 字节长句 data → `9b09ffa7…`。**教训：标准用例集必须从原文取，绝不能凭记忆** |
+| 2026-11-23 | ★ 算法等价性验证 | 用 PowerShell **逐行复刻** [crypto_util.cj](./backend-cangjie/src/common/crypto_util.cj) 的 `hmacSha256`（含 `key.size > 64 → SHA-256 压缩后取前 32 字节` 分支、ipad/opad 构造），与 .NET `HMACSHA256` 标准实现在 RFC 4231 **Case 1/2/3/4/6/7** 上逐用例比对 | ✅✅ **6/6 全等**。这是 L-CJ-1「后端全程无法编译」约束下**第一次、也是目前唯一一次对后端算法做出的真实正确性证据** —— 不依赖编译器，直接证明 HMAC 构造在算法层无误（含长 key 压缩分支）。期望值表见第十二节 |
+| 2026-11-23 | 取证 | 读 `app_config.cj` 全文确认 `globalConfig` 能否在测试进程内安全初始化 | ✅ `loadDotEnv`/`resolveMysqlExe` 全程 `try/catch(_:Exception){}` + `exists` 短路，无 `.env` 时仅回落默认值 → `cjpm test` 不会因配置加载抛异常，测试可安全引用 `globalConfig.jwtSecret` |
+| 2026-11-23 | 取证 | 用 PowerShell 复刻 `round2`/`formatNum2` 校验期望值 | ⚠️ **发现语义陷阱**：PowerShell `[long]$x` 是 round-half-to-even，仓颉 `Int64(Float64)` 官方教程仅证实 `Int64(1024.1024)→1024`（截断方向），`.5` 边界无法证实。据此定下**测试策略：纯整数级金额做精确断言，凡落在 `.5`/二进制不可精确表示的浮点一律用 `@Assert(a, b, delta: 0.011)`** |
+| 2026-11-23 | P1.1 | 落地 7 个测试文件共 **188 个 `@TestCase`**：crypto(22) / jwt(26) / response(26) / router(13) / payroll(32) / performance(30) / rate_limit(39) | ⚠️ **仍未编译**；`@Test`/`@TestCase` 逐行分列、import 成对、同包同名 `_test.cj` 全部按第十一节官方规范自查 |
+| 2026-11-23 | P1.1 收口 | `payroll_controller_test.cj` 里旧量尺 `payCentResidue`（依赖 `Int64` 截断方向）全部替换为语义无关的 `payCentDistance(v) <= 0.01` | ✅ `git grep payCentResidue` 零命中；并按 IEEE-754 double 间距论证 `99999.99+0.01` 精确舍入为 `100000.0` → `tax 21090.00 / net 78910.00` 落在整数分上，新阈值可达 |
+| 2026-11-23 | 取证 | 反查 `_ = expr`（丢弃非 Unit 返回值）在基线中的先例 | 🔴 **零先例**：基线只存在 `auth_controller.cj:96` 那种「调用返回 Unit 的函数」作语句。据此把 `rate_limit_test.cj` 里 **24 处** `_ = recordLoginFailure(...)` / `_ = rlFailNTimes(...)` 全部改为「先 `let` 绑定再断言返回值」，循环内改为累加进具名 `var` —— 既消除未证实语法，又净增约 20 条真实断言 |
+| 2026-11-23 | 取证 | 反查 `let (a, _, c) = tuple` 与 `return if (c) {x} else {y}` | ✅ 均有基线先例（`mysql_pool.cj:322`、`crypto_util.cj:206/222`；`rate_limit.cj:47`、`response.cj:181`）→ 判定可用，写入第十一节「已证实可用」清单 |
+| 2026-11-23 | 自查 | `performance_controller_test.cj` 中 `perfNullSrc`/`perfRatioText` 写在 `@Test class` **之后** | ✅ 顶层声明的「前向引用是否可用」未获基线证实 → 整体搬至 class 之前并删除尾部重复副本；`rate_limit_test.cj` 的 `rlItoa` 同病同治 |
+| 2026-11-23 | 防假红 | 复核 `testBlockedSecondsWithinBlockWindow` 的 `s >= LOGIN_BLOCK_SECONDS - 1` | ✅ 放宽为 `- 5`：触封时刻与读取时刻之间若宿主机卡顿 >1s，旧断言会把**环境问题报成代码缺陷**。同类：全表状态机用例统一「首行 `resetLoginThrottle()` + `rl-<用例名>` 唯一键」双重隔离 |
+| 2026-11-23 | 取证 | 为写冒烟脚本，逐条回源码校准响应字段名（**不靠想象、不靠桩自证**） | ✅ 4 个 controller 的 JSON 拼接段全部 Read 核实：`attendanceRowToJson`(`clockInTime/clockOutTime/lateMinutes/earlyMinutes/status`)、`attendance/my` 的 `{list, summary{month, shouldAttendDays:22, actualAttendDays, lateCount, earlyCount, leaveDays, overtimeHours}}`、`dashboard/overview` 的 7 个 KPI + 5 个数组字段、`auth/me` 的 16 字段 userJson、`payrolls/generate` 的 `{payMonth, generatedCount}`。**教训：搜仓颉源码里的 JSON 字段名必须搜裸标识符** —— 源码写成 `"\"clockInTime\":${jsonStr(r[6])}"`，用 `jsonStr\("clockInTime"` 这类模式**零命中**，会误判为「接口没这字段」 |
+| 2026-11-23 | P1.2 | 落地 [scripts/api-smoke.ps1](./scripts/api-smoke.ps1)（约 660 行，8 章节，112 断言点）：①探活 ②4 角色登录 + 4 种 401 + 改密 ③RBAC 12 条 403 / 9 条 200 / 404 / 方法不匹配 ④看板 KPI ⑤打卡幂等 ⑥请假审批扣年假 + 撤回 ⑦绩效自评 ⑧薪酬生成**逐行金额复算** + batch-pay 缺参 400 + 审计日志 | ⚠️ 编写完成；`[Parser]::ParseFile` 零错误；UTF-8 **with BOM**（`.ps1` 含 CJK 必需，与 `.cj`/`.md` 相反，见第十一节） |
+| 2026-11-23 | P1.2 验证 | 写一次性 node 桩（**不入库**）建模「完全正确的后端」，按源码契约复刻统一信封 `{code,message,data}`、路由 404、`Bearer ` 前缀 401、角色 403、年假扣减状态机、同日重复打卡 400 | ✅ 首跑 `9 通过 / 34 失败` → 定位为**桩自身 bug**（`/auth/login` 误标为需鉴权）→ 修复后 `112 通过 / 0 失败 / 0 跳过`，`exit 0` |
+| 2026-11-23 | P1.2 反检 | **反向自检**：给桩加 `SABOTAGE` 开关注入 5 类真实缺陷，逐一验证脚本必须变红（防止「桩与脚本同时写错而自洽」的假绿） | ✅✅ 5/5 全部捕获且 `exit 1`：`tax`→个税分档 + 实发口径 2 处失败；`rbac`→18 条越权失守；`leaveskip`→`审批通过扣减年假 1 天（5 -> 5）`；`clockdup`→同日二次打卡未拒；`audit`→日志无本轮动作痕迹 |
+| 2026-11-23 | P1.2 边界 | 退出码与降级路径实测 | ✅ 无服务：`exit 2` + 提示「请先启动后端：`powershell -File .\start-backend.ps1`」（本轮作废，不计通过）；`-SkipMutating`：`63 通过 / 0 失败 / 5 跳过`，`exit 0`（写操作正确降级为 SKIP 而非假绿） |
+| 2026-11-23 | P1.2 修 bug | 隔离实验定位「看板数组非空」两条假红 | ✅ 根因是 **PowerShell 输出流自动解包**：`Get-JsonArray` 里 `return @($Value)` 在单元素时退化成标量 `PSCustomObject`，其 `.Count` 求值为**空**（不是 1），`-ge 1` 判假。三处 return 改一元逗号 `return , @($Value)`。已把该坑写进函数注释与第十一节纪律 |
+| 2026-11-23 | P1.2 防假绿 | 重构第 5 节年假守卫：原实现 `/auth/me` 失败时把余额读成 0 并**静默降级为事假**，会把「鉴权整体挂了」渲染成「用例通过」 | ✅ 改为 `[double]::NaN` 哨兵 + `IsNaN / ANNUAL / 其它` 三分支；SKIP 只在断言点记一次（避免重复计数），守卫处只打 WARN |
+| 2026-11-23 | P1.2 防自崩 | 断言的**详细消息参数先于断言本身求值**，`"...$($resp.Data.GetType().Name)"` 在 `Data` 为 null 时抛异常→trap→`exit 2`，把「接口契约不符」错报成「脚本崩溃」 | ✅ 该处改为对原始报文做正则判定：`$myPay.Text -match '"data"\s*:\s*\['`。纪律固化进第十一节 |
+| 2026-11-23 | P1.3 契约取证 | 为给 mock 补接口，`Read` 逐字段核实 4 个后端 handler 与 `main.cj` 的路由注册（**不靠记忆、不靠前端 TS 类型反推**）：`handleDepartmentsTree` / `handlePositionList` / `handleSystemUsers` / `handleSystemAuditLogs` | ✅ 取得权威口径：`activeCount` 是「`status != 'RESIGNED'`」**含试用期**；`children` 空集必须输出 `[]`；`isActive` 后端由字符串 `"1"` 转**布尔**出参；`sendPage` 信封固定 `{list,total,page,pageSize}` **不回显查询条件**；`pageSize` 非 `1..100` 一律回落 15；`/system/*` 是 `requireRoles(["ADMIN"])` 而 `tree`/`positions` 只 `requireAuth` |
+| 2026-11-23 | P1.3 | mock 后端从 25 个接口扩到 **29 个**：新增 4 条路由 + 4 个 handler，并给 `Account` 补 `lastLoginAt`/`createdAt` 两字段以贴合 `sys_user` 列 | ✅ rbac-menu 用例的 unmatched 闸门由红转绿 |
+| 2026-11-23 | P1.3 根因 | 3 例用例（approval:62 / approval:74 / payroll:72）登录 `waitForURL` 30s 超时 | ✅ 根因**不是断言写错**，是 **Playwright fixture 惰性**：只有被用例解构到的 fixture 才 setup，凡 `async ({ page }) => {}` 的写法 `mock` 根本没初始化 → `context.route` 从未挂载 → 登录穿过 vite 代理打到不存在的 8080。修法是把 `mock` 声明成 **auto fixture**（`[fn, { auto: true }]`），副作用是 unmatched 闸门对**所有**用例生效 |
+| 2026-11-23 | ★ L-FE-5 修复 | 2 例年假余额假红（期望 4 得 5、期望 0 得 5）→ 定位为**真实前端缺陷**：`auth.user` 初始化自 `localStorage.hrms_user` 是登录那一刻的快照，旧守卫只在 `!auth.user` 时 `refreshProfile` ⇒ 整页刷新**永不**回源 `/auth/me`，改角色/审批扣假后页面长期显示过期画像 | ✅ **改前端而非弱化断言**：[router/index.ts](./frontend-web/src/router/index.ts) 加模块级 `profileSynced` 开关，每次整页加载后首次进入受保护路由强制同步一次（`from.path === '/login'` 时跳过，避免刚登录多打一次）。`approval.spec.ts:158` 的 `page.reload()` 后断言余额 `4` 通过，等于用 E2E 钉住了这个缺陷的回归 |
+| 2026-11-23 | P1.3 闸门见效 | 守卫新增 `/auth/me` 后 rbac-menu 报越权请求 | ✅ 把 `/api/v1/auth/me` 加进 `trackProtectedApi` 白名单并**在注释里写清理由**：它发生在目标组件挂载之前，属导航守卫的画像同步，不是越权模块偷跑数据 |
+| 2026-11-23 | ★ 抓出既存假绿 | 修完守卫后 `payroll.spec.ts:82` 反而变红：收到 `['/api/v1/payrolls', '/api/v1/payrolls/my']` | ✅ 读 `PayrollView.vue` 确认这是**设计如此**（「我的工资条」pane 对 HR 无 `v-if`，`onMounted` 无条件 `loadMyPayrolls()`）；旧断言 `toEqual(['/api/v1/payrolls'])` 一直靠「请求恰好早于监听器」而**假绿**，新加的 `await /auth/me` 改变时序才把它揭穿。**改测试、保留严格意图**：断言换成「非 payrolls 路径为空集」+ `toContain('/api/v1/payrolls')`，并注释警告勿再退化成精确数组 |
+| 2026-11-23 | P1.3 收口 | 复跑全量 + 三连静态检查 | ✅ `42 passed (1.1m)`（`--workers=1`）；`npm run typecheck` / `npx eslint . --max-warnings 0` / `npm run build` 全 exit 0（build 的 chunk >500kB 警告系既存，非本轮引入） |
+| 2026-11-23 | 文档回填 | 回填 P1.3 时反查代码注释里引用过的编号，发现**注释与风险表脱节**：`L-FE-2`/`L-FE-4` 已被 `attendance.spec.ts` 引用、`L-FE-5` 已被 `router/index.ts` 与 `rbac-menu.spec.ts` 引用，但第十节只有 `L-FE-1` | ✅ 第十节补齐 `L-FE-2`~`L-FE-5`（已修项用删除线 + 标注回归锁位置）并新增 `L-MOCK-1`/`L-MOCK-2`/`L-E2E-1`/`L-E2E-2` 四条诚实清单。**纪律：代码注释引用风险编号时，该编号必须在第十节存在**，否则引用悬空 |
+| 2026-11-23 | L-FE-3 顺手修 | 登记 `UserProfile.isActive: number` 时回源码确认 `auth_controller.cj:34` 出参为 `${r[4] == "1"}`（布尔），且 `git grep isActive` 证明**当前无消费方** | ✅ 类型改 `boolean` + 注释标出处；删掉 mock 里为此而写的 `true as unknown as number` 强转（强转即该偏差的化石证据）。改后 `typecheck` exit 0，零运行时行为变化 |
+| 2026-11-23 | P1.4 前置取证 | 发现 `playwright.config.ts` 的 `channel` 默认 `'msedge'`（为迁就本机无 Chrome 而设），GitHub runner 上的 msedge 是否可用**未经证实** → 不赌，改为 CI 显式 `E2E_CHANNEL=chromium` + `playwright install --with-deps chromium` | ⚠️ 先静态查 `types.d.ts`：`channel?: string`（自由字符串，无类型约束），`coreBundle.js` 里只在 CDP 连接分支见到 `channel === "chromium"` 判断 → **静态无法定论**，遂转为实测（见下一行） |
+| 2026-11-23 | ★ P1.4 实证 | 本机 `npx playwright install chromium` 后，用**与 CI 完全等价的条件**复跑：`E2E_CHANNEL=chromium` + `CI=true`（后者同时触发 `workers=2`、`github` reporter、`reuseExistingServer:false` 自建 vite dev） | ✅✅ **42 passed (38.8s)**，`exit 0`。`channel: 'chromium'` 在 Playwright 1.65.1 下确实解析为自带 Chromium，此前的静态存疑被实测消除。**且比 msedge 快了近一倍**（1.1m → 38.8s） |
+| 2026-11-23 | P1.4 | 落地 [.github/workflows/ci.yml](./.github/workflows/ci.yml)：`frontend`（`npm ci`/typecheck/eslint/build/上传 dist）+ `e2e`（install chromium → `playwright test`，失败上传 report）+ `backend`（`if: vars.BACKEND_CI_ENABLED == 'true'`，**默认 skipped**）；带 `concurrency` 取消旧运行、`timeout-minutes`、`permissions: contents: read`、`npm ci` 而非 `install` | ✅ 用仓库内已有的 `js-yaml` 解析校验通过（3 job / 步骤数与 `if` 表达式均符合预期）。**后端 SDK 安装步骤刻意留空并注明「需人工核实」**：宁缺毋伪，不写没核实过的下载地址，也不用 `continue-on-error` 把「后端无 CI」伪装成绿 |
+| 2026-11-23 | P1.4 反假绿 | `backend` 作业里的 `api-smoke` 步骤**故意 `exit 1`** | ✅ 该步骤需要「已启动的后端 + `hrms_db`」，CI 里两样都还没接入。若此处静默跳过，一旦有人启用 `BACKEND_CI_ENABLED`，就会看到「build+test+smoke 全绿」的假象。改为明确 `::error::` + `exit 1`，把「没接线」暴露成刺眼的红 |
+| 2026-11-23 | ★ P1 提交前自审 | 提交前把**无法编译的后端改动**逐处回基线取证（`git grep <pat> 6e79923` 是这里唯一的武器）：① `case X =>` 后接多条语句 —— 基线 `jwt_util.cj:85-87` 正是此形 ✅；② `Array<UInt8>(1, repeat:)` —— 构造式来自基线 `router.cj:9 Array<Byte>(4096, repeat: 0)`，`UInt8` 本身另有官方文档取证（本文件 286 行）✅；③ 元组 `_` 解构 —— 基线确有，但注释里的**行号引用是错的**（写 126，实际 322） | ✅ 修正该行号。**教训**：文档里刚立完「注释引用风险编号必须存在于风险表」的纪律，自己的代码注释就有一条行号失效 —— 引用一旦写进注释就必须可核验，否则它比没有引用更坏 |
+| 2026-11-23 | P1 提交前清理 | `.gitignore` 的 Playwright 段落里 `frontend-web/playwright-report/` 被重复写了两遍（本会话两轮各自加过一次，互不知情） | ✅ 去重并给 `.pw-browsers/` 补上「仅当把 `PLAYWRIGHT_BROWSERS_PATH` 指进仓库时才会出现」的说明；`*.log` 早已在忽略列表内，故历史 `e2e-run-*.log` 从未进过暂存区（`git status -uall` 复核通过） |
 
 ---
 
@@ -187,16 +239,30 @@
 
 | 编号 | 风险 | 影响 | 处置 |
 | --- | --- | --- | --- |
-| L-CJ-1 | **全部后端 `.cj` 改动未经 `cjc` 编译** | 语法/类型错误只能在有 SDK 的机器上暴露 | 建立第十一节「API 考证纪律」；主动消除 4 处未证实语法；CI 里后端 job 标 `continue-on-error` 或不启用，**绝不假绿** |
-| L-CJ-2 | `eprintln` 未在本仓库基线出现过，`main.cj` 首次使用 | 若 `std` 未预导入则编译失败 | 记为已知残留点，SDK 就位后第一优先验证；必要时改 `println` |
+| L-CJ-1 | **全部后端 `.cj` 改动未经 `cjc` 编译** | 语法/类型错误只能在有 SDK 的机器上暴露 | 建立第十一节「API 考证纪律」；主动消除 4 处未证实语法；CI 里后端 job 标 `continue-on-error` 或不启用，**绝不假绿**。**部分缓解**：已用 PowerShell 复刻 `hmacSha256` 与 .NET 标准实现逐用例比对（6/6 全等），在不依赖编译器的前提下证明了核心密码学算法的**逻辑**正确性（注意：这只覆盖算法语义，**不覆盖语法/类型**） |
+| ~~L-CJ-2~~ | ~~`eprintln` 未在基线出现过，`main.cj` 首次使用~~ | ~~若 `std` 未预导入则编译失败~~ | ✅ **已关闭**：`main.cj` 9 处 `eprintln(` 全部改为基线已证实的 `println(` |
+| ~~L-CJ-3~~ | ~~「字符串插值内嵌 `if` 表达式」`"${if (...) { "null" } else { r[8] }}"` 是未证实语法，且是基线里唯一一处~~ | ~~若不支持则整个后端编译失败~~ | ✅ **经考证为误报，不改基线**：`git grep -n -e '\${if (' 6e79923 -- backend-cangjie/src` 命中 **4 处**（`performance_controller.cj:34,35`、`attendance_controller.cj:153,154`），按第十一节规则 1「基线已存在即已证实」直接放行；为零收益改动原作者可编译代码属过度工程 |
 | L-RND-1 | `std.random.Random` **非 CSPRNG**，用于口令盐 | 盐可预测性弱于 OS 熵源 | stdx 无 `getrandom` 封装；已记录，待 SDK 后评估更强熵源 |
 | L-RL-1 | 登录限流是**单进程内存表** | 多实例部署时限流失效 | 已在文件头注释；生产需外置存储 |
 | L-RL-2 | 进程重启 → 限流状态清空 | 重启可绕过封锁 | 同上 |
 | L-RL-3 | 服务绑定 `127.0.0.1`，`clientIp` 只能取 `X-Forwarded-For` | 无前置代理时所有请求共用 `local` 键 | 已在代码与注释中标注 |
 | L-DB-1 | 每条 SQL 一个 `mysql.exe` 子进程（D3 未根治） | 高并发下吞吐极差、句柄风暴 | 串行闸门把并发压成 1，避免崩，但不解决慢 |
 | L-FE-1 | `adoptRenewedToken` 只写 `localStorage`，Pinia 内 `token.value` 不同步 | 同一会话内内存态与服务端态短暂不一致；仅影响日志/调试 | 已记录，属可接受偏差；后续可在 `refreshProfile` 回读 |
+| ~~L-FE-2~~ | ~~「考勤全员监控」把月份作为 `date` 参数发出，而后端只读 `month`~~ | ~~「按月份筛选」形同虚设，界面看着能用其实一直在查全量~~ | ✅ **已修 + 已加回归锁**：[attendance.spec.ts](./frontend-web/e2e/attendance.spec.ts) 中「筛选月份要按后端契约发 `month`」一条直接断言出站查询串；mock 侧同步只认 `month`（写错立刻 unmatched/筛选失效） |
+| ~~L-FE-3~~ | ~~`UserProfile.isActive` 在 TS 里标成 `number`，而 `auth_controller.cj:34` 出参是 `${r[4] == "1"}`（**布尔**）~~ | ~~任何 `user.isActive === 1` 的写法静默恒假，且 `vue-tsc` 不会报错~~ | ✅ **已修**：类型改为 `boolean` 并注释标明后端出处；mock 里原有的 `true as unknown as number` 强转一并删除（该强转本身就是这个偏差的化石证据）。当前无消费方，属**消除陷阱**而非修复线上故障 |
+| ~~L-FE-4~~ | ~~考勤「修正」弹窗只回传 `status`/`remark`，后端对 `lateMinutes`/`earlyMinutes` 取 `getJsonInt(..., 0)`~~ | ~~一次修正即把迟到分钟数清零，进而让「迟到/早退次数」与算薪扣款失真~~ | ✅ **已修 + 已加回归锁**：[attendance.spec.ts:144](./frontend-web/e2e/attendance.spec.ts) 「修正考勤不得抹掉迟到分钟数」钉住回传当前分钟数这一行为 |
+| ~~L-FE-5~~ | ~~`auth.user` 只从 `localStorage.hrms_user` 水合（登录那一刻的快照），旧守卫仅在 `!auth.user` 时回源 `/auth/me` ⇒ **整页刷新永不刷新画像**~~ | ~~管理员被改角色后仍按旧角色放行菜单；审批通过的年假已扣但页面显示旧余额；账号被禁用仍停留在已登录视图~~ | ✅ **已修**：[router/index.ts](./frontend-web/src/router/index.ts) 增加模块级 `profileSynced`，每次整页加载后首次进入受保护路由强制 `refreshProfile()` 一次（来源为 `/login` 时跳过）。回归由 `approval.spec.ts` 的三处年假余额断言（含 `page.reload()` 后仍为 `4`）钉死。**注意**：该守卫的 `catch` 对 401 以外的异常**保留本地画像放行**，这是刻意取舍——不能让后端抖动把已登录用户踢下线，代价是极端情况下仍可能短暂看到旧数据 |
+| L-MOCK-1 | E2E 的 29 个接口由**有状态内存 mock** 提供，`E2E_REAL=1` 直连真实后端的路径**从未跑过**（无 SDK，后端起不来） | 「42 passed」证明的是**前端逻辑 + 前端对契约的理解**自洽，不等于**后端实现无缺陷** | 与 `L-SMOKE-1` 同性质。所有 mock 契约均逐字段 `Read` 自 `backend-cangjie/src`（第九节有取证行），SDK 就位后首件事是 `E2E_REAL=1` 复跑；届时失败**默认判为 mock 与后端的漂移**，以源码为准修 mock |
+| L-MOCK-2 | mock 是「按我读到的源码写的」，存在**读错字段**的残余风险 | 字段名/口径同时写错时 mock 与 spec 会自洽假绿 | 缓解手段是 teardown 的 `unmatched == []` 闸门（前端发起而 mock 未实现的接口必红）+ 分页/鉴权分支照抄后端语义；**根治手段只有 `E2E_REAL=1`**，见 L-MOCK-1 |
+| L-E2E-1 | 整页加载后的 `page.on('request')` 监听器**只能在导航之后挂载**，早于监听器完成的请求采不到 | 对采到的请求做 `toEqual([精确数组])` 会退化成**计时器**，随机假绿/假红（`payroll.spec.ts` 的旧断言就假绿了若干轮才被揭穿） | 纪律固化：**导航后一律断言「不该出现的为空集」+ `toContain(关键项)`，禁止精确数组**；确需精确计数时改用 `page.route` 侧计数（拦截点必然全采） |
+| L-E2E-2 | `--workers` 在本终端默认取到 `2`（`CI` 环境变量为真） | 与本地 `vite` 单实例预览服务并发时偶发抖动，报错形态像用例问题 | 本地复跑显式 `--workers=1`；CI 里由 Playwright 自己起 preview，不受此影响 |
+| L-CI-1 | `ci.yml` 的**前端两个 job 尚未在 GitHub runner 上真跑过**（本机只能做到「等价条件复现」：`CI=true` + `E2E_CHANNEL=chromium` + 自建 dev server，42 passed） | runner 镜像差异（apt 依赖、Node 22 预装版本、`npm ci` 跨平台可选依赖）仍可能造成首跑失败 | 首次推送后**必须去看一眼 Actions 的实际结果**，失败即回来修 workflow，不许默认它绿。已尽量降低风险：浏览器不依赖 runner 预装（显式 `playwright install --with-deps chromium`）、依赖用 `npm ci` 锁死、`node-version: '22'` 与本机同大版本 |
+| L-CI-2 | `backend` job 默认 `skipped`，且其 SDK 安装步骤是**空的**（只有 `command -v cjpm` 检查）；`api-smoke` 步骤**故意 `exit 1`** | 仓库里看不到后端 CI 信号；若误开 `BACKEND_CI_ENABLED` 会直接红 | 这是**有意的**。禁止用 `continue-on-error`/写死未核实下载地址来凑绿；真正启用需要：①核实并补上 SDK 安装 ②在 job 内起 MySQL 并导入 `sql/init.sql` ③拉起 8080 后再摘掉 smoke 的 `exit 1`。三步缺一不可 |
 | L-TMP-1 | 临时 `q_<seq>.sql` / `c_<seq>.cnf` 落盘 | 崩溃时残留含口令的 cnf 文件 | `finally` 里 `removeQuiet`；建议部署机对 `tmp_sql` 目录开启 ACL 限制 |
 | L-COV-1 | 无 CI 运行后端测试 | 单测写了但跑不起来 | `cjpm test` 已按官方规范编写，SDK 就位即可执行 |
+| L-SMOKE-1 | `scripts/api-smoke.ps1` **只对本地桩执行过，从未对真实后端跑过**（无 SDK，后端起不来） | 「112 通过」证明的是**脚本逻辑自洽且能抓错**，不等于**当前后端实现无缺陷** | 已在脚本文件头显式声明此前提；SDK 就位后首件事即 `powershell -File scripts\api-smoke.ps1` 对真实 8080 复跑，届时若出现失败，**默认判为后端缺陷**（脚本的反检能力已由 5 类注错证明） |
+| L-SMOKE-2 | 用于验证脚本的 node 桩**刻意不入库** | 无自动化回归网可长期复用 | 桩是「按我读到的源码写的」，若字段名记错会与脚本**同时错而自洽**；长期 fixture 更会与真实 API 漂移并反过来误导。故只在会话内使用、验毕即删，契约的唯一权威来源是 `backend-cangjie/src` 源码本身 |
+| L-SMOKE-3 | 脚本对**打卡幂等 / 登录限流 / 余额不足**等状态相关分支采取「宽容 + SKIP」策略 | 这些路径不会稳定产出断言，覆盖率有水分 | 宁可 SKIP 也不假绿；SKIP 数在汇总里单独打印，便于识别「本次实际验证了多少」 |
 
 ---
 
@@ -208,11 +274,15 @@
 
 **已证实可用（基线或官方）**：
 `String.toArray/fromUtf8/toRuneArray/replace/trimAscii/isEmpty/startsWith/endsWith/split/indexOf/toAsciiLower`；
-`ArrayList.add/toArray/size/[]`；`Array<T>(size, repeat:)`；`File.writeTo/exists/remove`；`Directory.create(recursive:)`；
+`ArrayList.add/toArray/size/[]`；`Array<T>(size, repeat: value)` —— **本轮双重背书**：① 官方 std.core 文档原文「该构造函数**不会拷贝 `repeat`**，如果 `repeat` 是一个引用类型，构造后数组的每一个元素都将指向相同的引用」；② 官方社区可运行示例 `Array<Int64>(3, repeat: 1)`。此前一度因搜索结果把另一重载渲染成 `init(size: Int64, item!: T)` 而误判 `repeat:` 是错参数名，追加查证后确认**参数名就是 `repeat`**，`crypto_util.cj`/`rate_limit.cj` 的写法无需改动；`File.writeTo/exists/remove`；`Directory.create(recursive:)`；
 `executeWithOutput` → `(Int64, Array<UInt8>, Array<UInt8>)`；`AtomicInt64.fetchAdd`；
 `Int64/UInt16/Float64.tryParse`、`?? def`、`if (let Some(x) <- ...)`；
 `toHexString`、`SHA256().write/finish`、`toBase64String/fromBase64String`；
 切片 `s[..n]` / `s[(i+1)..]`、`if` 表达式赋值、`match/case`、`for (x in arr)`、`try/finally` 内 return；
+**多语句 `match` 臂**（`case Some(x) =>` 后跟整段缩进块、块内再嵌 `match`）、**元组解构 `let (a, b) = f()`**（基线 `payroll_controller.cj:98,186`、`performance_controller.cj:171`、`mysql_pool.cj:61,84,126,136`）；
+**元组解构中的 `_` 占位**（`let (code, _, errStr) = runMysqlFile(sql)`、`let (_, iter, saltHex, digestHex) = stored`；基线 `mysql_pool.cj:322`、`crypto_util.cj:206/222`，多 `_` 的四元组亦实证可用）；
+**`return if (c) { a } else { b }`（if 表达式直接作为 return 的值）**（基线 `rate_limit.cj:47`、`response.cj:181`）；
+**字符串插值内嵌 `if (...) { } else { }` 表达式**（基线 4 处实证：`performance_controller.cj:34,35`、`attendance_controller.cj:153,154`）—— 已证实可用，但**新代码仍优先用独立函数**（可读性 + 便于单测），不为此回改基线；
 原始字符串 `"""..."""` 支持 `${}` 插值；整数字面量按目标类型推断；
 `std.sync`：`interface IReentrantMutex { lock(): Unit; tryLock(): Bool; unlock(): Unit }`，**`ReentrantMutex` 实现该接口**（`lock()` 无 Guard 返回值）；
 `std.random`：`open class Random`，`init()`、`nextUInt8s(Array<UInt8>): Array<UInt8>`、`nextUInt64()`；
@@ -221,8 +291,14 @@
 **已证实不可用 / 主动规避**：
 `HashMap`/`ConcurrentHashMap`（未证实 → 用 `ArrayList` 线性表 + 互斥锁）；`Mutex.lock()` 返回 Guard（未证实 → 用 `ReentrantMutex` 的 `lock()/unlock()`）；
 引用同一性 `!==`/`!===`（未证实 → 改为按 key 值过滤）；**顶层 `var` 全局可变变量**（未证实 → 改为 `let store = Store()` + 类内 `var` 字段，与基线 `let queryCounter = AtomicInt64(0)` 同构）；
-字符串插值内嵌 `if (...) { } else { }` 表达式（未证实 → 抽出独立函数如 `remainingAfterFailure()`、`describeJwtSecret()`）；
-`Rune → UInt32` 显式转换（未证实 → 用 `String.toArray()` 的字节循环比较）；`removeAt`（未证实 → 重建表）。
+`Rune → UInt32` 显式转换（未证实 → 用 `String.toArray()` 的字节循环比较）；`removeAt`（未证实 → 重建表）；
+**顶层函数的声明顺序**：基线所有 `.cj` 都把 helper 写在被调用点**之前**，未出现任何「后定义前调用」的实例
+  ⇒ 无法证实前向引用可用，纪律定为「测试文件的顶层 helper 一律放在 `@Test class` 之前」；
+**丢弃非 `Unit` 返回值**：`_ = f()` / `let _ = f()` 在基线中**零先例**（唯一近似形态是 `auth_controller.cj:96`
+  那种调用返回 `Unit` 的 `clearLoginFailures(tkey)` 作语句）⇒ 禁用，改为先 `let` 绑定再拿去断言。
+**含裸 `$` 的字符串字面量**（如 `"$"`、`"a$b"`）与 **`"$${X}"` 试图转义 `$` 的写法** —— 已用 `git grep -E '\$[^{]' 6e79923 -- backend-cangjie/src` 证实**基线里 `$` 后面永远紧跟 `{`**，即整个仓库从未出现过一个不启动插值的 `$`。因无法排除仓颉支持 `"$ident"` 简写插值，这类写法词法风险不可控 → 需要裸 `$` 时用 `String.fromUtf8(Array<UInt8>(1, repeat: 0x24))` 逐字节构造（见 `crypto_util.cj` 的 `PWD_SEP`）；
+**`str(x)` 转字符串函数**（未证实存在 → 一律用插值 `"${x}"`）；
+**`eprintln`**（基线未出现 → 统一 `println`）。
 
 **单元测试框架（1.0.5 官方逐字，本轮新证实）**：
 - **无需任何 import**（官方：「单元测试框架 API 已在 `std` 的 `unittest` 包、宏在 `std.unittest.testmacro` 包，不需要在测试文件中显式导入」）；若要显式写则两行成对：`import std.unittest.*` + `import std.unittest.testmacro.*`。
@@ -236,3 +312,212 @@
 > 反面教材：本仓库 `.claude/skills/cangjie-lang/examples/09_unit_test.cj` 中的 `@Test class` + `@Assert(...)` 写法**是编造的伪语法**（文件自带「假设测试框架提供」注释），**不可作为 API 依据**。凡本地 skill 文档与官方文档冲突，一律以官方为准。
 
 **`cjc` 编译选项**：`cjc --test` 使程序入口由 `main` 变为宏生成的 `test_entry`（来源：V5 `compile_options_ohos`）。
+
+### 11.1 PowerShell 5.1 脚本侧纪律（P1.2 建立，每条都是**现场踩过**的，不是抄来的）
+
+> 与仓颉侧同理：本项目唯一的 Windows shell 是 Windows PowerShell 5.1，它对编码和输出流的处理有多处
+> 与「直觉」相反的行为。下列 7 条中，前 3 条各直接导致过一次**假红或脚本崩解**，已在 `api-smoke.ps1` 里修掉。
+
+1. **`return @($x)` 会被输出流自动解包（最阴险，制造假红）**
+   函数返回单元素数组时，PowerShell 把数组解包成那个**标量元素**本身。于是标量 `PSCustomObject` 的 `.Count`
+   求值为**空**（不是 1），`(...).Count -ge 1` 直接判假 —— 明明数据在，断言却红。
+   ✅ 必须写一元逗号：`return , @($Value)` / `return , $Value`。
+   （外包 `@(Get-JsonArray $v).Count` 能得 1，这正是定位根因的隔离实验：内层 `.Count` 空、外层 1 ⇒ 问题在返回处。）
+2. **含 CJK 的 `.ps1` 必须存成 UTF-8 *with* BOM**（注意：与 `.cj`/`.ts`/`.md` 的「一律无 BOM」纪律**正好相反**）
+   PS 5.1 无 BOM 时按 ANSI 代码页解析 → 中文注释/字符串变 `閫氳繃` → 全角括号 `）` 的字节序列破坏引号配对 →
+   **解析器直接报 `Unexpected token`**。本仓库的实证：一次性反检脚本首次运行即以这种方式崩解，加 BOM 后正常。
+   ✅ 落盘用 `[IO.File]::WriteAllText($p, $s, (New-Object System.Text.UTF8Encoding $true))`；校验用 `[Parser]::ParseFile`。
+3. **断言的详细消息参数**先于断言本身**求值**
+   `Assert-True (cond) "标题" "实际=$($resp.Data.GetType().Name)"` —— 当 `Data` 为 null 时，第三个参数**先抛异常**，
+   触发脚本级 `trap` → `exit 2`，把「接口契约不符」（应为 exit 1 的失败）渲染成「脚本自身崩溃」（本轮作废）。
+   ✅ 消息里禁止访问可能为 null 的成员；类型判定改走原始报文正则 `$resp.Text -match '"data"\s*:\s*\['`。
+4. **`$null -eq @()` 为 `True`** ⇒ 绝不能用 `$null -ne $Data` 判断「是不是数组」，也不能用 `$null -eq $Data` 判断
+   「是不是空数组」。✅ 统一经 `Get-JsonArray` 规整后用 `.Count` 判空，「字段缺失」另用原始文本断言。
+5. **参数绑定会把显式 `$null` 转成 `""`**：`param([string] $Body = $null)` 收到 `-Body $null` 时实参是空串。
+   ⇒ 不能用 `$null -ne $Body` 区分「没传」与「传了空体」。✅ 用 `[string]::IsNullOrWhiteSpace()` 或改用哨兵值。
+6. **HTTP 层**：`Invoke-WebRequest` 必须 `-UseBasicParsing`（否则依赖 IE 引擎）；非 2xx 会抛异常，须
+   `catch [System.Net.WebException]` 后从 `GetResponseStream()` 按 **UTF-8** 读响应体，才能拿到服务端返回的中文 `message`；
+   请求体保持**纯 ASCII**，避免 PS 5.1 出站编码把中文写成乱码而污染数据库。
+7. **不用 `Set-StrictMode -Version Latest`**：被测接口缺字段会让脚本自己崩（等同坑 3 的后果）。
+   ✅ 改用脚本级 `trap { 打印 FATAL; exit 2 }`，并明确退出码语义：**0 全通过 / 1 有断言失败 / 2 环境不可用或脚本自身异常（本轮作废，不计通过）**。
+
+**验证方法论（比上面 7 条更重要）**：桩**不能自证契约**。桩是按读到的源码写的，字段名若记错，会出现
+「桩与脚本同时错而自洽」的假绿。因此：① 断言里的每个字段名都必须回 `backend-cangjie/src` 用 grep/Read 校准；
+② 必须做**反向自检** —— 往桩里注入 N 类真实缺陷，逐类确认脚本**必然变红**，否则该断言等于没写；
+③ 客户端**独立复算**业务口径（如个税 `Get-ExpectedTax` 与后端 `calculateTax` 同规则、不同实现），
+防「前后端在同一处逻辑上写错却互相印证」。
+
+---
+
+## 十二、测试期望值（ground truth）固化表
+
+> 全部数值**由本机 .NET `SHA256`/`HMACSHA256` 实算**，不使用任何「凭记忆」的常量。
+> HMAC 用例集已用 `WebFetch` 拉取 **RFC 4231 原文**逐字核对（此前的 Case 编号错位已纠正，编造的 Case8 已删除）。
+
+### 12.1 SHA-256
+
+| 输入 | 十六进制摘要 |
+| --- | --- |
+| `""` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `"abc"` | `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad` |
+
+### 12.2 HMAC-SHA256（RFC 4231；★ 自研实现与 .NET 标准实现 6/6 全等）
+
+| Case | key | data | 期望 MAC |
+| --- | --- | --- | --- |
+| 1 | 20×`0x0b` | `"Hi There"` | `b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7` |
+| 2 | `"Jefe"` | `"what do ya want for nothing?"` | `5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843` |
+| 3 | 20×`0xaa` | 50×`0xdd` | `773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe` |
+| 4 | `0102…19`（25 字节） | 50×`0xcd` | `82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b` |
+| 6 | 131×`0xaa` | `"Test Using Larger Than Block-Size Key - Hash Key First"`（54 字节） | `60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54` |
+| 7 | 131×`0xaa` | `"This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm."`（152 字节） | `9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2` |
+
+> Case 6/7 覆盖 `key.size > 64 → 先 SHA-256 压缩` 分支；Case 1/3/4 覆盖 `key.size <= 64 → 零填充` 分支。
+
+### 12.3 口令派生 `deriveKey`（saltHex=`0a1b2c3d4e5f60718293a4b5c6d7e8f9`，口令=`Passw0rd!`）
+
+| iterations | 期望值 |
+| --- | --- |
+| 1 | `7e761c1334828544d447f253a916f367104c0c16c054951f90208eca55196ed6` |
+| 2 | `49d0540dd3bfd9c02fed2406a03758371aa8b77b99403d8d6ffd5c3178f1cb49` |
+| 3 | `3e1a3768115e7c5b5c8719f9c7ad88f61d6e92213d89700ce611235f01917d1b` |
+
+`legacyHash("admin123")` = `01af9bb1ecaaa9cca89e8e32f9d910ce776133525f804dc117a29d7ee6b14e7c`
+
+### 12.4 纯函数边界（金额类按第十一节策略区分「精确」与「delta」）
+
+`calculateTax`（两种取整语义下均一致 → **精确断言**）：
+
+| taxable | tax | | taxable | tax |
+| --- | --- | --- | --- | --- |
+| `-100.0` | `0.0` | | `3000.0` | `90.0` |
+| `0.0` | `0.0` | | `12000.0` | `990.0` |
+| `500.0` | `15.0` | | `25000.0` | `3590.0` |
+| `1000.0` | `30.0` | | `50000.0` | `9840.0` |
+| `2000.0` | `60.0` | | `100000.0` | `22340.0` |
+
+`calculatePayrollValues(base, bonus, ot, attDed, ss)`：
+
+| 入参 | tax | net | 断言方式 |
+| --- | --- | --- | --- |
+| `10000,0,0,0,0` | `290.0` | `9710.0` | 精确 |
+| `4000,0,0,0,0` | `0.0` | `4000.0` | 精确 |
+| `0,0,0,0,0` | `0.0` | `0.0` | 精确 |
+| `20000,5000,1000,500,2000` | `2290.0` | `21210.0` | **delta: 0.011**（落在 `.5` 边界） |
+
+`mapPerformanceGrade`：`90.0→("S",1.20)`、`89.99→("A",1.10)`、`80.0→("A",1.10)`、`70.0→("B",1.00)`、`60.0→("C",0.80)`、`59.99→("D",0.50)`、`0.0→("D",0.50)`
+
+`truncateUtf8`（手工推演 UTF-8 延续字节回退，**字节级确定**）：`("abc",5)→"abc"`、`("abcdef",3)→"abc"`、`("中文abc",4)→"中"`、`("中文",1)→""`、`("x",0)→""`、`("x",-5)→""`
+
+`formatNum2` 精确可用值：`0.0→"0.00"`、`1.0→"1.00"`、`10.0→"10.00"`、`5000.0→"5000.00"`、`90.0→"90.00"`、`990.0→"990.00"`、`3590.0→"3590.00"`、`9840.0→"9840.00"`、`0.5→"0.50"`、`-0.5→"-0.50"`
+
+### 12.5 断言强度分级（「无法编译」约束下防假绿 / 防假红的唯一杠杆）
+
+`round2(x)` 的实现是 `Float64(Int64(absVal * 100.0 + 0.5)) / 100.0` 再加符号，
+其中有两处**本机无法证实**的语义：
+(1) `Int64(Float64)` 是向零截断还是就近取整（官方教程只证实 `Int64(1024.1024)→1024`）；
+(2) 编译器是否把 `absVal * 100.0 + 0.5` 收缩成一条 fma（结果可能相差 1 ULP）。
+
+因此所有金额断言分三级：
+
+| 级别 | 适用场景 | 断言写法 |
+| --- | --- | --- |
+| **A 精确** | early-return 字面量 `0.0`；纯 Float64 比较（档位归属、单调性、上下界）；**源码字面量原样返回**（`mapPerformanceGrade` 的 1.20/1.10/1.00/0.80/0.50）；同一函数两侧同口径；纯字符串拼接（golden JSON、结构计数） | `@Assert(a, b)` |
+| **B 容差** | 凡经过 `round2` / `formatNum2` 的分值 | `@Assert(a, b, delta: payEps())`，`payEps() = 0.011` |
+| **C 量尺** | 想表达「输出落在整数分上」这一**与具体税额无关**的契约，又不想依赖 (1)(2) | `payCentDistance(v) <= 0.01` |
+
+`payCentDistance`（[payroll_controller_test.cj](./backend-cangjie/src/controller/payroll_controller_test.cj)）：
+
+    scaled = |v| * 100.0
+    nearest = Float64(Int64(scaled + 0.5))
+    d = |scaled - nearest|
+    return if (d > 0.5) { 1.0 - d } else { d }
+
+> 关键点：取 `min(d, 1-d)` 之后，**无论 `Int64()` 是截断还是就近，`nearest` 都是某个最近整数**，
+> 距离语义不变 ⇒ 该量尺完全不受未知取整方向影响。反向自检 `payCentDistance(1.234) > 0.05`
+> 证明量尺本身能分辨非整数分的值（123.4 分 → 距离 0.4）。
+> **禁止**再写 `|x - Int64(x + 0.5)| <= 0.51` 这类依赖截断方向的老式判定。
+
+### 12.6 `calculateTax` 分档表（完整 ground truth，含档界边际）
+
+档位：`≤0 → 0`；`≤3000 → 3%`；`≤12000 → 10% - 210`；`≤25000 → 20% - 1410`；`else → 25% - 2660`。
+档界**连续**：3000 两侧同 90.00、12000 两侧同 990.00、25000 两侧同 3590.00
+⇒「档界 +1 元」的边际税额恰等于新档税率：`3001→0.10`、`12001→0.20`、`25001→0.25`。
+
+| taxable | tax | 档 | | taxable | tax | 档 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `500.0` | `15.0` | 3% | | `11999.0` | `989.9` | 10% |
+| `1234.56` | `37.04` | 3% | | `12000.0` | `990.0` | 10% |
+| `2500.0` | `75.0` | 3% | | `12001.0` | `990.2` | **20%** |
+| `2999.0` | `89.97` | 3% | | `15000.0` | `1590.0` | 20% |
+| `3000.0` | `90.0` | 3% | | `20000.0` | `2590.0` | 20% |
+| `3001.0` | `90.1` | **10%** | | `24999.0` | `3589.8` | 20% |
+| `4999.0` | `289.9` | 10% | | `25001.0` | `3590.25` | **25%** |
+| `5700.0` | `360.0` | 10% | | `30000.0` | `4840.0` | 25% |
+| `7777.0` | `567.7` | 10% | | `50001.0` | `9840.25` | 25% |
+| `33333.33` | `5673.33` | 25% | | `99999.0` | `22339.75` | 25% |
+| `999999.0` | `247339.75` | 25% | | | | |
+
+`calculatePayrollValues` 五元组向量（顺序 `base, bonus, ot, attDed, ss`）：
+
+| 入参 | taxable | tax | net |
+| --- | --- | --- | --- |
+| `10000,2000,500,300,1500` | `10700` | `360.0` | `10340.0` |
+| `99999.99,0.01,0,0,0` | `95000` | `21090.00` | `78910.00`（求和精确舍入到 `100000.00`） |
+| `29999,1,0,0,0` | `25000` | `3590.0` | `26410.0` |
+| `54999,0,0,0,0` | `50000` | `9839.75` | `45159.25` |
+| `17777,0,0,0,0` | `17277` | `1145.4` | `16631.6` |
+| `104999,0,0,0,0` | `100000` | `22339.75` | `82659.25` |
+
+> `payGross()`  helper 的求值顺序与被测函数内部**完全一致**（`base+bonus+ot-att-ss` 同序左结合），
+> 因此 `g - tax - net` 与被测函数中间量逐位相同，一致性断言可以钉成「恒等于 0」。
+
+### 12.7 JSON 拼接的结构计数常量（低成本钉死契约）
+
+| 函数 | 字段数 | 逗号 | 引号 | 反斜杠（转义用例） |
+| --- | --- | --- | --- | --- |
+| `payrollRowToJson` | 17 | 16 | 50（34 key + 16 值） | 3 |
+| `perfRowToJson` | 15 | 14 | 50（30 key + 20 个 `jsonStr` 值） | 4 |
+
+> **key 计数必须数 `"<dq>:"`**（如 `payDq()+":"` = 17、`perfDq()+":"` = 15），
+> 不能数裸 `":"` —— `paidAt` / `updatedAt` 的值自带 `HH:MM:SS` 两个冒号，会把 17 污染成 19。
+> `perfRowToJson` 的 `selfScore`/`finalScore` 为 `null` 时是**裸插值**，不引入引号 ⇒ 引号数恒 50。
+> MySQL 导出的字面量 `NULL` **不被 `isEmpty()` 判空**，会原样裸插值（`testRowToJsonPassesMysqlNullLiteralThrough`
+> / `perfCountOf(out,"NULL")==15`），这是既有行为，测试只负责钉住它、不负责修正它。
+
+### 12.8 `mapPerformanceGrade` 五档 + `rate_limit` 常量契约
+
+| score | grade | ratio | | score | grade | ratio |
+| --- | --- | --- | --- | --- | --- | --- |
+| `120.0` / `1000.0` | `S` | `1.20` | | `79.99` / `70.0` | `B` | `1.00` |
+| `90.0` | `S` | `1.20` | | `69.99` / `60.0` | `C` | `0.80` |
+| `89.99` / `80.0` | `A` | `1.10` | | `59.99` / `0.0` / `-5.0` | `D` | `0.50` |
+
+> 系数是源码字面量原样返回 ⇒ 严格相等安全；但**跨档差值不可做算术相等**
+> （`0.80 - 0.50 != 0.30`，二进制浮点），只能用大小比较表达。
+
+| 常量 | 值 | 口径 |
+| --- | --- | --- |
+| `LOGIN_WINDOW_SECONDS` | 900 | 连续失败的统计窗口 |
+| `LOGIN_MAX_FAILURES` | 5 | 触封阈值（测试额外约束 `3 ≤ 阈值 ≤ 10`） |
+| `LOGIN_BLOCK_SECONDS` | 900 | 封锁时长（测试约束 `≥ LOGIN_WINDOW_SECONDS`，否则「解封即重开」） |
+| `LOGIN_MAX_KEYS` | 4096 | 内存表上限，表满时**复用下标 0 槽位** |
+
+### 12.9 后端单测清单（P1.1 已完成部分）
+
+| 文件 | 用例数 | 覆盖对象 |
+| --- | --- | --- |
+| `common/crypto_util_test.cj` | 22 | sha256 / hmac / deriveKey / verifyPassword / 盐 |
+| `common/jwt_util_test.cj` | 26 | 签发-校验往返、篡改、过期、角色与 uid 回读 |
+| `common/response_test.cj` | 26 | jsonEscape / jsonStr / parseJsonObject / formatNum2 / truncateUtf8 |
+| `common/router_test.cj` | 13 | 路径分段、Query 解码、路由匹配 |
+| `controller/payroll_controller_test.cj` | 32 | calculateTax 分档、算薪向量、payrollRowToJson |
+| `controller/performance_controller_test.cj` | 30 | mapPerformanceGrade、perfRowToJson（含 golden JSON） |
+| `middleware/rate_limit_test.cj` | 39 | 常量契约、纯函数、expiresAt、全表状态机 |
+| **合计** | **188** | |
+
+> 未覆盖并已诚实记录：`clientIp(ctx)` 仍无**直接单测**（构造 `HttpContext` 的可行性未证实）—— P1.2 已交付的
+> `scripts/api-smoke.ps1` 从**行为侧**间接覆盖其后果（登录限流键 `username@ip`：脚本用独立用户名 `no_such_smoke_user`
+> 只发 1 次错误口令，避免污染真实账号），但「XFF 解析是否正确」这条仍未断言，见 L-SMOKE-1；
+> 各 controller 的 handler 依赖 `queryRows`（需真库）；`expiresAt` 相关的「窗口/封锁到期」分支
+> 因**无法注入时钟**而不测，只测同一秒内必然成立的状态迁移。

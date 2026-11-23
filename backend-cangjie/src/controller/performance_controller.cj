@@ -8,7 +8,8 @@ import hrms_backend.db.*
 import hrms_backend.middleware.*
 import hrms_backend.service.*
 
-func mapPerformanceGrade(score: Float64): (String, Float64) {
+// 提为 public 以便 `performance_controller_test.cj` 覆盖 S/A/B/C/D 五档边界。
+public func mapPerformanceGrade(score: Float64): (String, Float64) {
     if (score >= 90.0) {
         return ("S", 1.20)
     } else if (score >= 80.0) {

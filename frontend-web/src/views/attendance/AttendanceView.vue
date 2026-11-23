@@ -112,19 +112,18 @@
               @keyup.enter="searchAll"
             />
             <el-date-picker
-              v-model="allFilters.date"
-              type="date"
-              value-format="YYYY-MM-DD"
-              placeholder="按日期筛选"
+              v-model="allFilters.month"
+              type="month"
+              value-format="YYYY-MM"
+              placeholder="按月份筛选"
               clearable
               @change="searchAll"
             />
             <el-select v-model="allFilters.status" clearable placeholder="考勤状态" class="!w-36" @change="searchAll">
               <el-option label="正常" value="NORMAL" />
               <el-option label="迟到" value="LATE" />
-              <el-option label="早退" value="EARLY" />
-              <el-option label="迟到且早退" value="LATE_EARLY" />
-              <el-option label="请假" value="LEAVE" />
+              <el-option label="早退" value="EARLY_LEAVE" />
+              <el-option label="迟到且早退" value="LATE_AND_EARLY" />
               <el-option label="缺勤" value="ABSENT" />
             </el-select>
             <el-button type="primary" plain icon="Search" @click="searchAll">筛选</el-button>
@@ -170,10 +169,16 @@
           <el-select v-model="fixForm.status" class="w-full">
             <el-option label="正常 NORMAL" value="NORMAL" />
             <el-option label="迟到 LATE" value="LATE" />
-            <el-option label="早退 EARLY" value="EARLY" />
-            <el-option label="请假 LEAVE" value="LEAVE" />
+            <el-option label="早退 EARLY_LEAVE" value="EARLY_LEAVE" />
+            <el-option label="迟到且早退 LATE_AND_EARLY" value="LATE_AND_EARLY" />
             <el-option label="缺勤 ABSENT" value="ABSENT" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="迟到(分)">
+          <el-input-number v-model="fixForm.lateMinutes" :min="0" :max="1440" :step="5" class="!w-full" />
+        </el-form-item>
+        <el-form-item label="早退(分)">
+          <el-input-number v-model="fixForm.earlyMinutes" :min="0" :max="1440" :step="5" class="!w-full" />
         </el-form-item>
         <el-form-item label="备注说明">
           <el-input v-model="fixForm.remark" type="textarea" :rows="3" placeholder="如：忘记打卡，主管核实补卡" />
@@ -218,19 +223,20 @@ const mySummary = ref<any>({})
 
 const allLoading = ref(false)
 const allList = ref<any[]>([])
-const allFilters = reactive({ keyword: '', date: '', status: '' })
+const allFilters = reactive({ keyword: '', month: '', status: '' })
 const allPagination = reactive({ page: 1, pageSize: 10, total: 0 })
 
 const fixDialogVisible = ref(false)
 const fixLoading = ref(false)
-const fixForm = reactive({ id: 0, empName: '', status: 'NORMAL', remark: '' })
+const fixForm = reactive({ id: 0, empName: '', status: 'NORMAL', lateMinutes: 0, earlyMinutes: 0, remark: '' })
 
 function attStatusLabel(s: string) {
   const m: Record<string, string> = {
     NORMAL: '正常',
     LATE: '迟到',
-    EARLY: '早退',
-    LATE_EARLY: '迟到且早退',
+    EARLY_LEAVE: '早退',
+    LATE_AND_EARLY: '迟到且早退',
+    // 历史遗留值：新数据不会再产生（请假走假勤审批模块），仅用于旧记录可读展示
     LEAVE: '请假',
     ABSENT: '缺勤'
   }
@@ -267,7 +273,7 @@ async function loadAllAttendance() {
       page: allPagination.page,
       pageSize: allPagination.pageSize,
       keyword: allFilters.keyword || undefined,
-      date: allFilters.date || undefined,
+      month: allFilters.month || undefined,
       status: allFilters.status || undefined
     })
     allList.value = res.list
@@ -310,6 +316,11 @@ function openFixDialog(row: any) {
   fixForm.id = row.id
   fixForm.empName = row.empName
   fixForm.status = row.status
+  // 后端 handleAttendanceUpdate 对 lateMinutes/earlyMinutes 取的是 getJsonInt(..., 0)，
+  // 缺省即清零。原实现只回传 status/remark，会把已有的迟到/早退分钟数抹掉，
+  // 进而让月度「迟到/早退次数」统计失真，所以必须先带入当前值再提交。
+  fixForm.lateMinutes = Number(row.lateMinutes ?? 0)
+  fixForm.earlyMinutes = Number(row.earlyMinutes ?? 0)
   fixForm.remark = row.remark || ''
   fixDialogVisible.value = true
 }
@@ -319,6 +330,8 @@ async function submitFix() {
   try {
     await updateAttendanceApi(fixForm.id, {
       status: fixForm.status,
+      lateMinutes: fixForm.lateMinutes,
+      earlyMinutes: fixForm.earlyMinutes,
       remark: fixForm.remark
     })
     ElMessage.success('考勤状态已修正')

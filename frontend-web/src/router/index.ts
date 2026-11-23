@@ -88,7 +88,17 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach(async (to, _from, next) => {
+/**
+ * 冷启动画像同步开关（缺陷 L-FE-5）。
+ *
+ * auth.user 初始化自 localStorage.hrms_user，是**登录那一刻**的快照。原守卫只在
+ * `!auth.user` 时才回源 /auth/me，于是整页刷新后：管理员刚被改角色仍按旧角色放行、
+ * 员工审批通过的年假已扣但页面仍显示旧余额。所以每次整页加载后首次进入受保护路由
+ * 必须做一次权威同步；模块级变量天然随整页加载重置，无需持久化。
+ */
+let profileSynced = false
+
+router.beforeEach(async (to, from, next) => {
   const auth = useAuthStore()
   if (to.path === '/login') {
     if (auth.isAuthenticated) {
@@ -107,10 +117,21 @@ router.beforeEach(async (to, _from, next) => {
   if (!auth.user) {
     try {
       await auth.refreshProfile()
+      profileSynced = true
     } catch {
       auth.logout()
       next('/login')
       return
+    }
+  } else if (!profileSynced) {
+    profileSynced = true
+    // 刚从登录页 replace 过来时画像就是 /auth/login 的返回，无需再打一次
+    if (from.path !== '/login') {
+      try {
+        await auth.refreshProfile()
+      } catch {
+        // 401 已由响应拦截器清鉴权并整页跳转 /login；其它异常保留本地画像，不打断导航。
+      }
     }
   }
 

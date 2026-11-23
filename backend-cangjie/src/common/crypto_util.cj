@@ -1,5 +1,6 @@
 package hrms_backend.common
 
+import std.convert.*
 import std.random.*
 import std.sync.*
 import stdx.crypto.digest.*
@@ -29,11 +30,17 @@ let OPAD_BYTE: UInt8 = 0x5C
 let SHA256_DIGEST_LEN: Int64 = 32
 
 // ---- 口令哈希参数 -----------------------------------------------------------
-// 新格式：cj1$<迭代次数>$<盐的十六进制>$<派生值的十六进制>
+// 新格式：cj1<SEP><迭代次数><SEP><盐的十六进制><SEP><派生值的十六进制>
 let PWD_PREFIX = "cj1"
 let PWD_SALT_BYTES: Int64 = 16
 let PWD_ITERATIONS: Int64 = 2000
 let LEGACY_HEX_LEN: Int64 = 64
+
+// 分隔符。仓库基线里不存在任何「裸 $ 字符串字面量」，而仓颉的插值语法以 "${" 起始，
+// "$${X}" / "..." 这类写法存在词法歧义风险。这里用基线已证实的
+// Array<T>(size, repeat:) + String.fromUtf8 逐字节构造，彻底绕开该不确定性。
+let DOLLAR_BYTE: UInt8 = 0x24
+let PWD_SEP: String = String.fromUtf8(Array<UInt8>(1, repeat: DOLLAR_BYTE))
 
 // 遗留格式（只读兼容，不再用于新写入）：sha256(固定盐 + 明文)
 let PASSWORD_SALT = "HRMS_CANGJIE_2026_SALT:"
@@ -145,7 +152,8 @@ func deriveKey(saltHex: String, rawPassword: String, iterations: Int64): String 
 
 public func hashPassword(rawPassword: String): String {
     let saltHex = randomHex(PWD_SALT_BYTES)
-    return "${PWD_PREFIX}$${PWD_ITERATIONS}$${saltHex}$${deriveKey(saltHex, rawPassword, PWD_ITERATIONS)}"
+    let iterText = "${PWD_ITERATIONS}"
+    return PWD_PREFIX + PWD_SEP + iterText + PWD_SEP + saltHex + PWD_SEP + deriveKey(saltHex, rawPassword, PWD_ITERATIONS)
 }
 
 func legacyHash(rawPassword: String): String {
@@ -169,7 +177,7 @@ func isLegacyHash(storedHash: String): Bool {
 
 // 从存储值中取出 (前缀, 迭代次数, 盐, 摘要)；格式非法返回 None
 func splitStoredHash(storedHash: String): Option<(String, Int64, String, String)> {
-    let parts = storedHash.split("$")
+    let parts = storedHash.split(PWD_SEP)
     if (parts.size != 4) {
         return Option<(String, Int64, String, String)>.None
     }
@@ -190,8 +198,12 @@ public func verifyPassword(rawPassword: String, storedHash: String): Bool {
     if (storedHash.isEmpty()) {
         return false
     }
+    // 注意：match 的 case 模式里不做元组解构（该写法未在基线出现过）。
+    // 统一先绑定整体，再用基线已证实的 `let (a, _, b) = tuple` 解构
+    // （见 mysql_pool.cj:322 `let (code, _, errStr) = runMysqlFile(sql)`）。
     match (splitStoredHash(storedHash)) {
-        case Some((_, iter, saltHex, digestHex)) =>
+        case Some(stored) =>
+            let (_, iter, saltHex, digestHex) = stored
             let derived = deriveKey(saltHex, rawPassword, iter)
             return constantTimeEquals(derived, digestHex)
         case None =>
@@ -206,7 +218,9 @@ public func verifyPassword(rawPassword: String, storedHash: String): Bool {
 // 登录成功后据此判断是否需要把遗留哈希 / 低迭代哈希升级为当前参数
 public func needsRehash(storedHash: String): Bool {
     match (splitStoredHash(storedHash)) {
-        case Some((_, iter, _, _)) => return iter != PWD_ITERATIONS
+        case Some(stored) =>
+            let (iter, _, _, _) = stored
+            return iter != PWD_ITERATIONS
         case None => return true
     }
 }

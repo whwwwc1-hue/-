@@ -5,7 +5,11 @@ export interface UserProfile {
   username: string
   role: 'ADMIN' | 'HR' | 'MANAGER' | 'EMPLOYEE'
   employeeId: number
-  isActive: number
+  /**
+   * 后端 `auth_controller.cj:34` 出参是 `"isActive":${r[4] == "1"}`，即**布尔**；
+   * 此处原先标成 number，任何 `user.isActive === 1` 的写法都会静默恒假（缺陷 L-FE-3）。
+   */
+  isActive: boolean
   name: string
   empNo: string
   deptId: number

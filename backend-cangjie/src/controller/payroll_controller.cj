@@ -8,7 +8,8 @@ import hrms_backend.db.*
 import hrms_backend.middleware.*
 import hrms_backend.service.*
 
-func calculateTax(taxableRaw: Float64): Float64 {
+// 提为 public 以便 `payroll_controller_test.cj` 直接覆盖个税分档与实发口径。
+public func calculateTax(taxableRaw: Float64): Float64 {
     let taxable = if (taxableRaw < 0.0) { 0.0 } else { taxableRaw }
     if (taxable <= 0.0) {
         return 0.0
@@ -23,7 +24,7 @@ func calculateTax(taxableRaw: Float64): Float64 {
     }
 }
 
-func calculatePayrollValues(baseSalary: Float64, bonus: Float64, overtimePay: Float64, attendanceDeduction: Float64, socialSecurity: Float64): (Float64, Float64) {
+public func calculatePayrollValues(baseSalary: Float64, bonus: Float64, overtimePay: Float64, attendanceDeduction: Float64, socialSecurity: Float64): (Float64, Float64) {
     let taxable = baseSalary + bonus + overtimePay - attendanceDeduction - socialSecurity - 5000.0
     let tax = calculateTax(taxable)
     let netSalary = round2(baseSalary + bonus + overtimePay - attendanceDeduction - socialSecurity - tax)
