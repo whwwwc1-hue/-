@@ -22,3 +22,159 @@ body {
   border: 1px solid #e2e8f0;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
 }
+
+/* ---------------------------------------------------------------------------
+ * P2.3 电子工资条打印 / 存为 PDF 专版（纯前端，零依赖）
+ *
+ * 做法：PayrollView 在工资条明细弹窗打开时，给 <html> 挂 hrms-payslip-print-mode，
+ * 并用 Teleport 往 body 追加一份「打印专用工资条」。屏幕上它 display:none 完全不占位；
+ * 只有在 @media print（Ctrl+P 或浏览器「另存为 PDF」）里才成为唯一可见内容。
+ *
+ * 为什么用 html 上的模式类而不是 CSS :has(.hrms-print-root)：
+ * :has() 在老版浏览器直接整条规则失效，退化成「打印整页 SPA」，属于静默错误；
+ * 模式类由弹窗状态驱动，可被 E2E 直接断言，也不依赖 afterprint 事件（该事件在无头浏览器里不可靠）。
+ * ------------------------------------------------------------------------- */
+.hrms-print-root {
+  display: none;
+}
+
+html.hrms-payslip-print-mode body {
+  background: #ffffff;
+}
+
+@page {
+  size: A4;
+  margin: 14mm 16mm;
+}
+
+@media print {
+  /* 侧边栏 / 顶栏 / 表格 / 弹窗遮罩全部让位给工资条专版 */
+  html.hrms-payslip-print-mode #app,
+  html.hrms-payslip-print-mode .el-overlay,
+  html.hrms-payslip-print-mode .el-loading-mask,
+  html.hrms-payslip-print-mode .el-message {
+    display: none !important;
+  }
+
+  html.hrms-payslip-print-mode .hrms-print-root {
+    display: block !important;
+    color: #000000;
+  }
+}
+
+/* 打印专版的排版（屏幕与纸质同一份 DOM，避免两套结构漂移） */
+.hrms-print-sheet {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.hrms-print-sheet th,
+.hrms-print-sheet td {
+  border: 1px solid #64748b;
+  padding: 5px 8px;
+}
+
+.hrms-print-sheet .is-label {
+  text-align: left;
+  width: 16%;
+  background: #f8fafc;
+  font-weight: 600;
+}
+
+.hrms-print-sheet .is-amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.hrms-print-sheet .is-section {
+  background: #f1f5f9;
+  font-weight: 700;
+  text-align: left;
+}
+
+.hrms-print-head {
+  margin-bottom: 10px;
+}
+
+.hrms-print-title {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.hrms-print-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.hrms-print-sheet {
+  margin-top: 8px;
+}
+
+.hrms-print-sheet .is-total {
+  font-weight: 700;
+  background: #f8fafc;
+}
+
+.hrms-print-sheet .is-net {
+  font-weight: 700;
+  font-size: 15px;
+  background: #eef2ff;
+}
+
+.hrms-print-verify,
+.hrms-print-warn {
+  margin-top: 10px;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid #94a3b8;
+}
+
+.hrms-print-verify {
+  color: #14532d;
+  border-color: #16a34a;
+}
+
+/* 复算不一致时必须比正常文案更醒目：这是一张「不该被打印出去」的单，红色加粗是最后一道提示 */
+.hrms-print-warn {
+  color: #7f1d1d;
+  border-color: #dc2626;
+  font-weight: 700;
+}
+
+.hrms-print-foot {
+  margin-top: 12px;
+  padding-top: 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #475569;
+  border-top: 1px solid #94a3b8;
+}
+
+/* 表头底色必须显式打印出来：浏览器默认不打背景色，用户没勾「背景图形」时表格只剩文字 */
+@media print {
+  .hrms-print-sheet .is-label,
+  .hrms-print-sheet .is-section,
+  .hrms-print-sheet .is-total,
+  .hrms-print-sheet .is-net {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* 工资条只有一页，任何一张小表被分页断开都会让「实发金额」落在下一页页首 */
+  .hrms-print-sheet,
+  .hrms-print-verify,
+  .hrms-print-warn,
+  .hrms-print-foot {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+

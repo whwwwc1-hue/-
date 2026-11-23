@@ -125,7 +125,7 @@
       ⚠️ 关键实证：CI 用 `E2E_CHANNEL=chromium` 而非本地默认的 `msedge`。这条**已在本机按 CI 等价条件跑过**（`CI=true` ⇒ `workers=2` + `reuseExistingServer:false` 自建 vite dev + Playwright 自带 chromium）：**42 passed (38.8s)**。
 
 **验收**：前端 CI 绿；单测覆盖全部金额与权限相关纯函数；越权与算薪金额有自动化断言。
-      ⚠️ 诚实修正原验收口径：「CI 绿」目前**只覆盖前端**（typecheck/lint/build/**51 个 E2E**，P2.2 前为 42）。后端 223 个 `@TestCase` 与 `api-smoke.ps1` 的 112 个断言点**仍无执行环境**（L-CJ-1），对应 job 呈 skipped 而非 passed。
+      ⚠️ 诚实修正原验收口径：「CI 绿」目前**只覆盖前端**（typecheck/lint/build/**57 个 E2E**；演进：P1.3 42 → P2.2 51 → P2.3 57）。后端 223 个 `@TestCase` 与 `api-smoke.ps1` 的 112 个断言点**仍无执行环境**（L-CJ-1），对应 job 呈 skipped 而非 passed。
 
 ---
 
@@ -166,10 +166,44 @@
 - **模板下载**：`'\uFEFF' + 表头 + CRLF + 示例行 + CRLF`，MIME `text/csv;charset=utf-8`。
   **BOM 是给 Excel 的**（无 BOM 时 Excel 按本地代码页打开会乱码），而解析侧两侧都会剥掉它，用例
   「带 BOM 的文件不误报表头问题」专门钉住这一点。
-- [ ] **P2.3 电子工资条打印/PDF**：[PayrollView.vue](./frontend-web/src/views/payroll/PayrollView.vue) 弹窗加 `@media print` 专版样式 + 「打印/导出 PDF」，字段含应发各项、五险一金、个税、实发。
+- [x] **P2.3 电子工资条打印/PDF**：[PayrollView.vue](./frontend-web/src/views/payroll/PayrollView.vue) 弹窗加 `@media print` 专版样式 + 「打印/导出 PDF」，字段含应发各项、五险一金、个税、实发。
+      ✅ **已完成并经真实浏览器验证**：新增 `e2e/payroll-print.spec.ts`（251 行 / **6 用例**），全量 **57 passed (1.5m)**；
+      `typecheck`/`eslint --max-warnings 0`/`build` 三连 exit 0。验收项「打印预览无侧边栏」不再靠人眼：
+      用例在 `emulateMedia({media:'print'})` 下断言 `aside`/`#app`/`#pane-admin`/弹窗全部 hidden、专版 visible，
+      并把纸媒渲染导出为 PNG + PDF 附进报告；PDF 实测 `MediaBox [0 0 594.96 841.92]`（= A4）且 `/Count 1`（单页）。
+      落地要点见下方「P2.3 契约与取证」，新增风险见 L-PRT-1 ~ L-PRT-3。
+
+**P2.3 契约与取证（已落地；这一版是「同一份 DOM 的第二套媒体查询」，不是新页面也不是 PDF 库产物）**
+- **改动面**（实测 `git diff --numstat`，命令见 12.12）：`PayrollView.vue` **+196 / −2**（350 → 544 行）、
+  `src/style.css` **+156**（24 → 180 行）、新增 `e2e/payroll-print.spec.ts` 251 行。合计 **603 行**。
+  后端**零改动**：不存在 `GET /api/v1/payrolls/:id` 明细接口（`main.cj` 只有 6 条薪资路由），
+  专版数据源就是列表行 `payrollRowToJson` 的 17 字段，因此打印件与页面不可能出现两套数字。
+- **开关是 `<html>` 上的模式类**，不是 `:has()`：`watch(slipVisible)` 挂/摘 `hrms-payslip-print-mode`，
+  `@media print` 规则以「模式类 + print」为双重条件。用 `:has(.hrms-print-root)` 的话，老浏览器整条规则静默失效，
+  退化成「打印整页 SPA」——这是最坏的错误形态（用户拿到一张带侧边栏的工资条而无人报错）。
+  模式类还带来可断言性：E2E 直接 `toHaveCount(1/0)`，无需猜渲染。
+- **`onBeforeUnmount` 兜底是必需的**：路由切走时 `el-dialog` 随组件卸载，`slipVisible` 不会从 true 变 false，
+  `watch` 不触发，模式类会残留到下一个页面 —— 下一个页面按 Ctrl+P 就会打出半张工资条。
+  用例「路由切换时组件卸载」用 `dispatchEvent('click')` 走**真实 SPA 导航**（弹窗遮罩会拦截普通 click），
+  从而证明这条兜底路径而不是靠整页刷新蒙混过去。
+- **PDF 走浏览器 print-to-PDF，不引入 jsPDF/html2canvas**：canvas 截图式 PDF 的金额是位图，
+  不可选中、不可检索、放大即糊，对工资条这种凭据类文档是倒退。`page.pdf()` 与用户点「另存为 PDF」是同一条流水线。
+- **客户端独立复算**（第十一节规则③）：`slipCheck` 用 `round2` 先分别合计应发/代扣再相减，与后端
+  `round2(base+bonus+overtime-deduction-social-tax)` 是两条不同取整路径；各项均为两位小数时恒等，
+  一旦后端改舍入口径就会显式报「复算校验不一致」并给出差额，而不是安静地打出一张看起来正常的单。
+- **刻意保留的两处不贴心**：① 关闭弹窗时**不清空 `activeSlip`**（清空会让正文在淡出动画里先消失），
+  专版靠模式类摘除而失效，用例对此有断言；② 草稿态同样可出条，纸质件「发放状态」如实标注
+  「草稿（尚未发放）」、发放时间留 `—`，而不是禁用按钮 —— HR 代员工先出条是真实需求，状态由纸质件自证。
+- **HR 侧新增入口**：核算中心操作列补「电子凭条」（列宽 150 → 205）。此前只有「我的工资条」页签能看明细，
+  HR 只能改数据、无法先出条，属 P2.3 顺带补齐的覆盖空洞。
 - [ ] **P2.4 考勤月度汇总导出**：`GET /api/v1/attendance/monthly-summary?month=&deptId=` 返回出勤率、迟到/早退/请假工时统计，前端一键导出 CSV。
 
-**验收**：100 行 CSV 导入含错误行时可部分成功并给出定位；打印预览无侧边栏；导出报表与页面数字一致。
+**验收**（逐项标注兑付状态，不整体打勾）：
+- 「打印预览无侧边栏」✅ **已兑付并有产物可复核**：`payroll-print.spec.ts` 在 print 媒体下断言 `aside`/`#app` hidden，
+  同时导出 `test-results/payslip-print.png` 与 `.pdf`（A4 单页），人眼与断言两条路都能查。
+- 「100 行 CSV 导入含错误行时可部分成功并给出定位」⚠️ **口径已被 P2.1 决策改掉**：整批要么全写要么全不写，
+  定位靠 `line` 物理行号。故这一条不再按原文验收，改按 P2.1 的「行级错误逐条回显 + 整批不写」兑付（见 `employee-import.spec.ts`）。
+- 「导出报表与页面数字一致」⬜ 待 P2.4。
 
 ---
 
@@ -279,6 +313,12 @@
 | 2026-11-23 | ★ P2.2 计数口算错（本文档自己的） | 第四节长期写着「mock 覆盖 **29 个接口**」，本轮沿用该数写 L-MOCK-1 时顺手实测：`Select-String 'if \(method ===' \| Measure-Object` = **25**（P2.2 后 27），`hrms.ts` 的 `export const *Api` = **47**，**两个口径都得不出 29** | ✅ 全文订正为 27 并写明口径；新增 **11.2 文档计数纪律**：凡写入本文档的计数必须附可复跑测量命令 + 明确统计口径，「接口数」这类模糊词不再单独出现 |
 | 2026-11-23 | P2.2 有意的取舍 | mock 未模拟 `sys_user` 开通与审计日志写入（真实后端导入成功会做这两件事） | ⚠️ 登记 **L-IMP-6**：`Account.username` 是 4 个演示账号的字面量联合类型，塞工号进去会破坏 `/system/users`、`/system/audit-logs` 既有用例的计数断言。改由 `api-smoke.ps1` 在真实库核对；对话框提示语也刻意写成「真实后端会以工号开通」而非谎报已完成 |
 | 2026-11-23 | P2.2 复跑记录 | 按 CI 等价条件复跑（`CI=true` + `E2E_CHANNEL=chromium`，Playwright 自建 dev server、`workers=2`） | ✅ **51 passed (47.9s)**。仍不勾销 L-CI-1：本机等价复跑 ≠ GitHub runner 实跑 |
+| 2026-11-23 | **P2.3** | 电子工资条打印 / 存为 PDF 落地：`style.css` +156 行（`@page A4` + `html.hrms-payslip-print-mode` 下的 `@media print` 隐藏 `#app`/遮罩/加载层/全局提示 + `.hrms-print-sheet` 三张表）、`PayrollView.vue` +196/−2 行（`Teleport` 打印专版、弹窗 footer「打印 / 存为 PDF」、核算中心操作列补「电子凭条」、`round2/money/slipCheck/slipVerifyText/printSlip/watch/onBeforeUnmount`）、新增 `e2e/payroll-print.spec.ts` 251 行 / 6 用例 | ✅ 全量 **57 passed (1.5m)**；`typecheck`·`lint --max-warnings 0`·`build` 三连 exit 0。后端零改动 |
+| 2026-11-23 | ★ P2.3 验收项从「人眼」改成「断言 + 产物」 | 第四节验收一直写着「打印预览无侧边栏」，但无头环境看不见打印预览 | ✅ 三层兑付：① `emulateMedia({media:'print'})` 下断言 `aside`/`#app`/`#pane-admin`/弹窗 hidden 且专版 visible；② 同一状态导出 PNG 供人眼复核；③ `page.pdf()` 导出真 PDF，实测 `MediaBox [0 0 594.96 841.92]`（A4）+ `/Count 1`（单页）。剩余不可验证部分登记 **L-PRT-3**，不假装消解 |
+| 2026-11-23 | ★ P2.3 不用 `:has()` 的理由 | 直觉写法是 `@media print { body:not(:has(.hrms-print-root)) … }`，一行搞定且无需 JS 参与 | ✅ 改走 `<html>` 模式类：`:has()` 在老浏览器是**整条规则静默失效**，退化形态是「打印出整页 SPA」——用户拿到带侧边栏的工资条而全程无报错，属最坏错误。模式类可被 E2E `toHaveCount` 直接断言，且不依赖 `afterprint`（无头下不可靠） |
+| 2026-11-23 | ★ P2.3 抓到状态残留路径 | 路由切走时 `el-dialog` 随组件卸载，`slipVisible` 不会由 true 变 false，`watch` 不触发，模式类会残留到下一个页面 | ✅ 补 `onBeforeUnmount` 兜底；用例用 `locator.dispatchEvent('click')` 命中 `router-link` 走**真实 SPA 导航**（弹窗遮罩会拦截普通 click，`page.goto` 则是整页刷新、清不清都测不出东西） |
+| 2026-11-23 | P2.3 两处刻意不贴心 | ① 关闭弹窗不清空 `activeSlip`；② 草稿态也能出条，不禁用按钮 | ✅ ①清空会让正文在淡出动画里先消失，专版靠模式类摘除即失效，用例断言「关闭后 print 媒体也打不出它」；②纸质件如实打印「草稿（尚未发放）」+ 发放时间 `—`，由单据自证状态比前端禁用更诚实。另：复算不一致分支 E2E 不可达，登记 **L-PRT-2** |
+| 2026-11-23 | P2.3 用例首跑纠偏 2 处 | ① `getByRole('button',{name:'关闭'})` strict violation —— EP 叉号的可访问名是「关闭此对话框」，包含匹配命中 2 个；② 断言 `toContainText('发放时间：')` 落空 —— 专版里「发放时间」是表格 `<th>`，**没有冒号**，冒号只存在于抬头那行 `<span>` | ✅ ① 加 `exact: true`；② 改为定位该行的 `<td>` 末格 `toHaveText('—')` / `toHaveText(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)`，断言从「文案存在」升级为「格子内容」。教训同 11.2：**模板里写没写标点，要以模板为准，不能凭叙述语感** |
 
 ---
 
@@ -317,6 +357,9 @@
 | **L-IMP-5** | 前端 `parseCsv` 与后端 `parseCsvInto` 是**两份独立实现**（TS / 仓颉），逐字符同语义靠人工维护，**无自动比对** | 任一侧改了引号/换行/空行处理而另一侧没跟上，就会出现「预览 8 行、后端算 9 行」或**错误行号错位**（真实事故形态：用户按行号改文件却改错行） | ① 12.10 的 17 组 ground truth 同时是**两侧的共同断言源**：后端 35 个 `@TestCase` 取其中若干，前端 `employee-import.spec.ts` 的「引号内逗号与换行」用例取引号+物理行号这一组；② 前端预览的 `数据 N 行` 直接来自前端解析，若与后端返回的 `total` 不一致，用例「预检 2 行 / 校验 3 行」会红。**SDK 就位后的第一件事**应是 `E2E_REAL=1` 跑这 9 个用例，让真后端来验收前端解析器 |
 | **L-IMP-6** | E2E mock **刻意不模拟** 导入时的 `sys_user` 开通与审计日志写入 | 「导入后能用工号登录」「审计里能查到这次导入」这两条**E2E 全绿也证明不了** | 有意的取舍，理由写在 `mock-server.ts` 注释里：`Account.username` 是 4 个演示账号的**字面量联合类型**，把工号塞进去会污染 `/system/users` 与 `/system/audit-logs` 既有用例的计数断言。改由 `api-smoke.ps1` 在真实库上核对（该脚本已有 `/system/users` 与 `/system/audit-logs` 的断言点）。**对话框里也照实说**「真实后端会以工号开通账号」，不写成已完成 |
 | **L-IMP-7** | 导入超时在前端**单独放宽到 60s**，是全局 15s 的一个例外 | 若后端改为逐行 INSERT 或 MySQL 变慢，60s 也可能不够；反过来，恶意大文件会长时间占住连接 | 上限已由 `EMP_IMPORT_MAX_ROWS = 500` 与 mock 的同一常量双向钉住；`hrms.ts` 里写明放宽原因（整批一条 SQL 交 `mysql.exe`，500 行远超全局默认）。真实后端就位后应实测 500 行耗时再决定是否收回这个例外 |
+| **L-PRT-1** | 打印专版**只有工资条这一张单**，且字段上限就是列表行 `payrollRowToJson` 的 17 个 | 「核算中心整表打印」「按部门批量出条」都没有；若后端将来把补贴/奖金拆成明细行，纸质件不会自动跟着变 | 有意收窄：P2.3 只兑付第四节那一条需求。机制已通用化（`html` 模式类 + `.hrms-print-root` + `.hrms-print-sheet`），P2.4 若需打印可直接复用，不必再造第二套 |
+| **L-PRT-2** | 「复算校验**不一致**」这条告警分支在 E2E 里**不可达** | mock 与后端同源计算，正常数据永远一致；CI 全绿也从未真正打印过一张「不一致」的单，该分支只有静态复核 | 诚实登记而非补测试：要触发它得人为篡改一次 `netSalary`，而这会让用例变成「测我自己编的数据」。SDK 就位后用 `E2E_REAL=1` 跑真实后端，若两侧口径漂移就会当场显形 —— 这正是这条分支存在的目的 |
+| **L-PRT-3** | 无头环境**验不了真实打印面板**：驱动、纸张来源、中文字体缺失、用户未勾「背景图形」都看不见 | 「A4 单页」这个结论只在 Chromium print-to-PDF 下成立（实测 `MediaBox 594.96×841.92`、`/Count 1`），换物理打印机不保证同结果 | 已用 `print-color-adjust: exact` 强制表头底色（这是不勾背景图形时最常见的塌法），并给三张小表加 `break-inside: avoid` 防「实发金额」掉到第二页。剩余不确定性属用户环境，标注为不消解 |
 
 ---
 
@@ -691,6 +734,46 @@ P1.3 收口时把 mock 覆盖量写成「**29 个接口**」，沿用数轮到 P
 
 **静态闸门实测**：`npm run typecheck` exit 0 / `npm run lint`（`--max-warnings 0`）exit 0 / `npm run build` exit 0（仅 `echarts` chunk >500 kB 的既存体积提示）。
 
+### 12.12 P2.3 打印链路的测量值（每条附复跑命令，口径见 11.2）
+
+改动量（cwd `frontend-web`，命令 `git diff --numstat -- src/views/payroll/PayrollView.vue src/style.css`；spec 为新文件，行数取 `(Get-Content …).Count`）：
+
+| 文件 | 实测 |
+| --- | --- |
+| `src/views/payroll/PayrollView.vue` | **+196 / −2**（350 → 544 行） |
+| `src/style.css` | **+156 / −0**（24 → 180 行） |
+| `e2e/payroll-print.spec.ts` | 新增 **251 行** / **6 个 `test(`** / **61 处 `expect(`** |
+| 合计 | **603 行**（含空行与注释） |
+
+计数命令（`expect(` 与 `test(` 用 `Select-String -Pattern … | Measure-Object`，与上表同一口径）：
+
+```powershell
+(Get-Content src\views\payroll\PayrollView.vue).Count   # 544
+(Get-Content src\style.css).Count                       # 180
+(Get-Content e2e\payroll-print.spec.ts).Count           # 251
+(Select-String -Path e2e\payroll-print.spec.ts -Pattern '^\s*test\(' | Measure-Object).Count   # 6
+(Select-String -Path e2e\payroll-print.spec.ts -Pattern 'expect\(' | Measure-Object).Count      # 61
+```
+
+验证结果（`npx playwright test --workers=1 --reporter=line`，末行汇总）：**57 passed (1.5m)**，
+其中 `payroll-print.spec.ts` 6 例（首跑 1 failed → 修 `exact: true` 后全绿，见第九节「P2.3 用例首跑纠偏」）。
+`npm run build` 亦为 exit 0，专版 CSS 随 `dist/assets/index-*.css` 一并产出（不是运行时注入）。
+
+纸面产物的实测（不是「看起来对」，是从文件字节里读出来的）：
+
+| 断言 | 命令 | 实测值 |
+| --- | --- | --- |
+| PDF 确为 A4 | 用例 `page.pdf({preferCSSPageSize:true})` 落盘后，`[regex]::Matches($t,'MediaBox\s*\[[^\]]*\]')` | 命中 3 处且**全为** `[ 0 0 594.96 841.92 ]`（Chromium 把页面尺寸写进多个对象），即 210×297mm |
+| 单页不成册 | 同上取 `/Count \d+` | `/Count 1` —— 3 处 MediaBox 是对象冗余，不是 3 页 |
+| 是合法 PDF | 用例内 `fs.readFileSync(pdf).subarray(0,5).toString('latin1')` | `%PDF-`（`expect` 断言，红了就 fail） |
+| 人眼复核 | `test-results/payslip-print.png`（gitignore） | 无侧边栏、无表格、无遮罩；三张小表 + 绿框复算文案 + 页脚说明 |
+
+纸质件金额（`payroll-print.spec.ts` 的 `CHEN` 常量，与 `payroll.spec.ts` 同源逐位推导）：
+应发 `￥19000.00 + ￥1710.00 + ￥491.38 = ￥21201.38`，
+代扣 `-￥923.56 −￥3515.00 −￥966.28 = −￥5404.84`，实发 `￥15796.54` —— 三个数由**前端 `slipCheck` 独立复算**得出，
+用例同时断言页脚文案与记账 `netSalary` 一致，所以「打印件数字与后端一致」不是靠肉眼比对两张页面得出的结论。
+
+
 
 ---
 
@@ -744,13 +827,31 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 
 ### 13.5 工作量对照（用户要求的「至少匹配现有工作量」）
 
-| 来源 | 规模 |
+每个数字都来自 `git log --format="COMMIT %h %s" --shortstat` 或 `git diff --shortstat` 的实跑输出，
+口径与例外见表下三条说明（本节是 11.2 计数纪律的执行样本）。
+
+| 来源 | 规模（实测） |
 | --- | --- |
 | 基线 `6e79923`（接手快照） | 111 files / **27803** insertions |
-| 我：`62921a7` P0 加固 | 8 files（`crypto_util`/`jwt_util`/`response`/`router`/`rate_limit`/`main`/`dbconfig`/`start-backend`） |
-| 我：`a6567ca` P1 全量 | **30 files / 6978 insertions**（22 新增） |
-| 累计（`git diff --shortstat 6e79923 HEAD`） | 38 files / **8082** insertions |
+| 我：`62921a7` P0 加固 | **11 files / 1123 insertions(+), 114 deletions(-)** |
+| 我：`a6567ca` P1 全量 | **30 files / 6978 insertions(+), 46 deletions(-)**（22 个新文件） |
+| 我：`7b39a1c` 文档（第十三节） | 1 file / 63 insertions |
+| 我：`be92fca` P2.1 后端导入 + 单测 | **4 files / 1403 insertions(+), 3 deletions(-)** |
+| 我：`936e0e4` P2.2 前端导入 + E2E | **5 files / 972 insertions(+), 5 deletions(-)** |
+| 我：P2.3 工资条打印（本次提交） | 代码 **603 行**（4 文件，逐项见 12.12）+ 本文档增量 |
+| **代码累计（对账口径，排除本文档）** | **44 files / 10466 insertions(+), 91 deletions(-)** |
+| 含文档累计（P2.3 提交**前**暂存区实测） | 45 files / 11219 insertions(+), 147 deletions(-) |
 
-⚠️ 诚实口径：按行数我目前约为基线的 **29%**，**尚未达标**。P2~P5（4 个功能 + 2 项审批增强 + 2 个新模块 + 5 份交付文档）
-是补齐量的主要来源，其中前端 mock/spec 与后端新 controller 单测的行数「含金量」高于文档，但**行数本身不是目标**，
-可验证的功能与测试才是。
+三条口径说明：
+1. **代码累计**的复跑命令：`git diff --shortstat 6e79923 HEAD -- . ":(exclude)FOLLOWUP_PLAN.md"`。
+   选它做分子是因为它**不受我写多少文档影响** —— 否则「工作量」会随着我补注释、补风险条目无限自增，这个数就没意义了。
+2. 「含文档累计」这一行注定过期：把命令里的 exclude 去掉即可复测（`git diff --shortstat 6e79923 HEAD`），
+   但每写一次本行它就自增，所以它**只作趋势参考、不进对账口径**。此处实测值来自 P2.3 提交前的 `git add -A` 暂存区。
+3. 旧版本本节写过「8 files」「38 files / 8082 insertions」「约 29%」，三个数**都是当时口算的**，
+   现已全部替换为 `git show --shortstat` 输出（P0 实为 11 files，不是 8）。这正是 11.2 立纪律的直接动因。
+
+⚠️ 诚实结论：按代码插入量 **10466 / 27803 ≈ 38%**，**仍未达到用户要求的「至少匹配现有需求量」**。
+剩余 P2.4 / P3.1 / P3.2 / P4.1 / P4.2 是主要来源，其中 P4 两个新模块要同时落
+「后端 controller + 仓颉单测 + 前端视图 + mock + E2E」，是唯一有希望把比值推向 60%+ 的工作包；
+P5 的 5 份交付文档**不计入**上面的分子（口径 1）。行数仍不是目标，可验证的功能与测试才是 ——
+但用户这句话本身是可量化的，所以我不拿「质量优先」当借口回避它。
