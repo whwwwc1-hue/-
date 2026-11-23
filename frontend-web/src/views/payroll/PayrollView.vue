@@ -502,13 +502,37 @@ async function handleBatchPay() {
   }
 }
 
-function exportCsv() {
-  if (!list.value.length) {
+async function exportCsv() {
+  // 之前直接导出 list.value，而 list.value 只是当前页：后端把 pageSize>100 夹回 20
+  // （payroll_controller.cj:124），所以超过一页的公司导出的文件里只有屏幕上那几行。
+  // 这里按 100 条一页把全量捞齐，导出的行数与筛选条件命中的 total 一致。
+  const pageSize = 100
+  const rows: any[] = []
+  let page = 1
+  try {
+    for (;;) {
+      const res = await getPayrollsApi({
+        page,
+        pageSize,
+        payMonth: filters.payMonth || undefined,
+        keyword: filters.keyword || undefined,
+        status: filters.status || undefined
+      })
+      const batch = res.list ?? []
+      rows.push(...batch)
+      if (batch.length < pageSize || rows.length >= (res.total ?? 0)) break
+      page += 1
+    }
+  } catch {
+    ElMessage.error('导出失败：薪资数据拉取不完整')
+    return
+  }
+  if (!rows.length) {
     ElMessage.info('当前列表暂无可导出数据')
     return
   }
   const headers = ['发薪月', '工号', '姓名', '部门', '基本工资', '绩效奖金', '加班补贴', '考勤扣款', '五险一金', '个税', '实发工资', '状态']
-  const rows = list.value.map((r) => [
+  const dataRows = rows.map((r) => [
     r.payMonth,
     r.empNo,
     r.empName,
@@ -522,7 +546,7 @@ function exportCsv() {
     r.netSalary,
     r.status
   ])
-  const csvContent = '\uFEFF' + [headers, ...rows].map((row) => row.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
+  const csvContent = '\uFEFF' + [headers, ...dataRows].map((row) => row.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')

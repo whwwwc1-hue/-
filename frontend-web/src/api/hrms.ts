@@ -89,6 +89,42 @@ export const clockOutApi = () => request.post<unknown, any>('/attendance/clock-o
 export const getMyAttendanceApi = (params?: { month?: string }) =>
   request.get<unknown, { list: any[]; summary: any }>('/attendance/my', { params })
 export const getAttendanceListApi = (params: any) => request.get<unknown, PageResult<any>>('/attendance', { params })
+
+// P2.4 考勤月度汇总：后端一次返回全量明细 + 合计行，前端「一键导出 CSV」直接复用这份数据，
+// 因此页面表格与导出文件天然同源（验收项「导出报表与页面数字一致」）。
+export interface AttendanceSummaryRow {
+  employeeId: number
+  empNo: string
+  empName: string
+  deptName: string
+  attendDays: number
+  lateCount: number
+  earlyCount: number
+  lateMinutes: number
+  earlyMinutes: number
+  leaveDays: number
+  overtimeHours: number
+  attendanceRate: number
+}
+
+export interface AttendanceSummaryTotals {
+  headcount: number
+  shouldAttendDays: number
+  actualAttendDays: number
+  lateCount: number
+  earlyCount: number
+  lateMinutes: number
+  earlyMinutes: number
+  leaveDays: number
+  overtimeHours: number
+  attendanceRate: number
+}
+
+export const getAttendanceMonthlySummaryApi = (params?: { month?: string; deptId?: number }) =>
+  request.get<unknown, { month: string; shouldAttendDays: number; summary: AttendanceSummaryTotals; list: AttendanceSummaryRow[] }>(
+    '/attendance/monthly-summary',
+    { params }
+  )
 export const updateAttendanceApi = (id: number, data: any) => request.put<unknown, null>(`/attendance/${id}`, data)
 
 export const createRequestApi = (data: any) => request.post<unknown, any>('/requests', data)

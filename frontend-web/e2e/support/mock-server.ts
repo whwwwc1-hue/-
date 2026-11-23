@@ -89,6 +89,13 @@ export const PAYROLL_MONTH = '2026-11'
  */
 export const HISTORY_MONTH = '2026-08'
 
+/**
+ * 与 attendance_controller.cj 的 attShouldAttendDays 同口径：
+ * 本项目没有排班表 / 工作日历表，应出勤天数固定按「每周 5 天 × 4.4 周 = 22 天」统计，
+ * 不随法定节假日变化（已知限制见 FOLLOWUP_PLAN 第十节 L-ATT-1）。
+ */
+export const ATT_SHOULD_ATTEND_DAYS = 22
+
 function nowStamp(offsetDays = 0): string {
   return `${localDate(offsetDays)} 10:00:00`
 }
@@ -611,6 +618,8 @@ export class MockBackend {
     if (method === 'POST' && path === '/attendance/clock-out') return this.needAuth(call, () => this.onClockOut(call))
     if (method === 'GET' && path === '/attendance/my') return this.needAuth(call, () => this.onMyAttendance(call))
     if (method === 'GET' && path === '/attendance') return this.needRoles(call, ['ADMIN', 'HR', 'MANAGER'], () => this.onAttendanceList(call))
+    // P2.4：精确路径必须排在 /^\/attendance\/(\d+)$/ 之前，否则 monthly-summary 会被当成 id 解析
+    if (method === 'GET' && path === '/attendance/monthly-summary') return this.needRoles(call, ['ADMIN', 'HR', 'MANAGER'], () => this.onMonthlySummary(call))
     if (method === 'PUT' && (m = path.match(/^\/attendance\/(\d+)$/))) return this.needRoles(call, ['ADMIN', 'HR'], () => this.onAttendanceUpdate(call, Number((m as RegExpMatchArray)[1])))
 
     /* ---------- 假勤申请与审批 ---------- */
@@ -1081,18 +1090,49 @@ export class MockBackend {
     return ok(this.todayRow(call) ?? null)
   }
 
+  /**
+   * 迟到判定：分钟数 > 0 或状态标记为迟到。
+   * 镜像 attendance_controller.cj 的 attMonthIsLate —— 「我的考勤」与「月度汇总」
+   * 必须共用同一判定，否则同一条记录会在两个页面给出不同结论。
+   */
+  private attIsLate(lateMinutes: number, status: string): boolean {
+    return lateMinutes > 0 || status === 'LATE' || status === 'LATE_AND_EARLY'
+  }
+
+  /** 早退判定：镜像 attMonthIsEarly，后端写的是 EARLY_LEAVE（不是前端旧代码里的 EARLY）。 */
+  private attIsEarly(earlyMinutes: number, status: string): boolean {
+    return earlyMinutes > 0 || status === 'EARLY_LEAVE' || status === 'LATE_AND_EARLY'
+  }
+
+  /** 出勤率（百分数）：镜像 attendanceRatePercent，应出勤 <= 0 归 0，超过 100% 封顶。 */
+  private attRatePercent(attendDays: number, shouldDays: number): number {
+    if (shouldDays <= 0) return 0
+    const rate = (attendDays * 100) / shouldDays
+    if (rate < 0) return 0
+    if (rate > 100) return 100
+    return round2(rate)
+  }
+
+  /** 镜像 isValidYearMonth：长度 7、第 5 位是 '-'、年首位 2、数字位全为 0-9、月份 01-12。 */
+  private isYearMonth(s: string): boolean {
+    return /^2\d{3}-(0[1-9]|1[0-2])$/.test(s)
+  }
+
   private onMyAttendance(call: Call): Reply {
     const empId = (call.account as Account).employeeId
-    const month = call.query.get('month') || utcMonth()
+    const rawMonth = (call.query.get('month') || '').trim()
+    const month = this.isYearMonth(rawMonth) ? rawMonth : utcMonth()
     const rows = this.attendance
       .filter((r) => r.employeeId === empId && r.workDate.slice(0, 7) === month)
       .sort((a, b) => (a.workDate < b.workDate ? 1 : a.workDate > b.workDate ? -1 : 0))
     let lateCount = 0
     let earlyCount = 0
+    let attendDays = 0
     for (const r of rows) {
-      if (r.lateMinutes > 0 || r.status === 'LATE' || r.status === 'LATE_AND_EARLY') lateCount += 1
-      // 后端写的是 EARLY_LEAVE（不是前端旧代码里的 EARLY），mock 忠于后端
-      if (r.earlyMinutes > 0 || r.status === 'EARLY_LEAVE' || r.status === 'LATE_AND_EARLY') earlyCount += 1
+      if (this.attIsLate(r.lateMinutes, r.status)) lateCount += 1
+      if (this.attIsEarly(r.earlyMinutes, r.status)) earlyCount += 1
+      // 缺勤当天有记录，但不计入出勤，与月度汇总同口径。
+      if (r.status !== 'ABSENT') attendDays += 1
     }
     const sum = (category: string) =>
       this.requests
@@ -1102,14 +1142,98 @@ export class MockBackend {
       list: rows,
       summary: {
         month,
-        shouldAttendDays: 22,
-        actualAttendDays: rows.length,
+        shouldAttendDays: ATT_SHOULD_ATTEND_DAYS,
+        actualAttendDays: attendDays,
         lateCount,
         earlyCount,
-        leaveDays: sum('LEAVE'),
-        overtimeHours: sum('OVERTIME')
+        leaveDays: round2(sum('LEAVE')),
+        overtimeHours: round2(sum('OVERTIME'))
       }
     })
+  }
+
+  /* -------------------------------------------------------- P2.4 月度汇总
+   *
+   * 逐条镜像 handleAttendanceMonthlySummary：
+   * 1. 主表是「员工」而不是「考勤记录」——整月一次卡都没打的人必须以 0 天出勤出现在报表里，
+   *    否则以考勤表为主表会把这类人整行隐藏，出勤率反而虚高。
+   * 2. status = 'RESIGNED' 的员工不参与统计。
+   * 3. ABSENT 有记录但不算出勤天数。
+   * 4. 请假 / 加班只统计 APPROVED，且按 start_time 所在月归类。
+   * 5. MANAGER 强制限定本部门，deptId 参数只对 ADMIN / HR 生效。
+   * 6. 合计行由明细行累加得到（不是重新查一遍），保证「合计 = 明细之和」。
+   * -------------------------------------------------------------- */
+
+  private onMonthlySummary(call: Call): Reply {
+    const account = call.account as Account
+    const rawMonth = (call.query.get('month') || '').trim()
+    const month = this.isYearMonth(rawMonth) ? rawMonth : utcMonth()
+    const deptId = Number(call.query.get('deptId') || 0)
+
+    let emps = this.employees.filter((e) => e.empStatus !== 'RESIGNED')
+    if (account.role === 'MANAGER') {
+      const myDept = this.employee(account.employeeId).deptId
+      emps = emps.filter((e) => e.deptId === myDept)
+    } else if (deptId > 0) {
+      emps = emps.filter((e) => e.deptId === deptId)
+    }
+
+    const list = emps
+      .map((e) => {
+        const rows = this.attendance.filter((r) => r.employeeId === e.id && r.workDate.slice(0, 7) === month)
+        let attendDays = 0
+        let lateCount = 0
+        let earlyCount = 0
+        let lateMinutes = 0
+        let earlyMinutes = 0
+        for (const r of rows) {
+          if (r.status !== 'ABSENT') attendDays += 1
+          if (this.attIsLate(r.lateMinutes, r.status)) lateCount += 1
+          if (this.attIsEarly(r.earlyMinutes, r.status)) earlyCount += 1
+          lateMinutes += r.lateMinutes
+          earlyMinutes += r.earlyMinutes
+        }
+        const sum = (category: string) =>
+          this.requests
+            .filter((r) => r.employeeId === e.id && r.category === category && r.status === 'APPROVED' && r.startTime.slice(0, 7) === month)
+            .reduce((s, r) => s + r.duration, 0)
+        const leaveDays = round2(sum('LEAVE'))
+        const overtimeHours = round2(sum('OVERTIME'))
+        return {
+          employeeId: e.id,
+          empNo: e.empNo,
+          empName: e.name,
+          deptName: e.deptName,
+          attendDays,
+          lateCount,
+          earlyCount,
+          lateMinutes,
+          earlyMinutes,
+          leaveDays,
+          overtimeHours,
+          attendanceRate: this.attRatePercent(attendDays, ATT_SHOULD_ATTEND_DAYS)
+        }
+      })
+      // ORDER BY d.dept_name ASC, e.emp_no ASC
+      .sort((a, b) => (a.deptName === b.deptName ? a.empNo.localeCompare(b.empNo) : a.deptName < b.deptName ? -1 : 1))
+
+    const totals = {
+      headcount: list.length,
+      shouldAttendDays: ATT_SHOULD_ATTEND_DAYS,
+      actualAttendDays: list.reduce((s, r) => s + r.attendDays, 0),
+      lateCount: list.reduce((s, r) => s + r.lateCount, 0),
+      earlyCount: list.reduce((s, r) => s + r.earlyCount, 0),
+      lateMinutes: list.reduce((s, r) => s + r.lateMinutes, 0),
+      earlyMinutes: list.reduce((s, r) => s + r.earlyMinutes, 0),
+      leaveDays: round2(list.reduce((s, r) => s + r.leaveDays, 0)),
+      overtimeHours: round2(list.reduce((s, r) => s + r.overtimeHours, 0)),
+      attendanceRate: this.attRatePercent(
+        list.reduce((s, r) => s + r.attendDays, 0),
+        list.length * ATT_SHOULD_ATTEND_DAYS
+      )
+    }
+
+    return ok({ month, shouldAttendDays: ATT_SHOULD_ATTEND_DAYS, summary: totals, list })
   }
 
   private onAttendanceList(call: Call): Reply {

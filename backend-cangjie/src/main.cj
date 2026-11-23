@@ -159,6 +159,9 @@ func dispatchRequest(ctx: HttpContext): Unit {
         if (path == "/api/v1/attendance/today" && method == "GET") { handleAttendanceToday(ctx); return }
         if (path == "/api/v1/attendance/my" && method == "GET") { handleAttendanceMy(ctx); return }
         if (path == "/api/v1/attendance" && method == "GET") { handleAttendanceList(ctx); return }
+        // P2.4 月度汇总：必须排在 `/attendance` 之后、`segs.size == 4` 的补卡分支之前。
+        // 它是 5 段路径，不会被 4 段分支误吞，但放在一起更好读。
+        if (path == "/api/v1/attendance/monthly-summary" && method == "GET") { handleAttendanceMonthlySummary(ctx); return }
         if (segs.size == 4 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "attendance" && method == "PUT") {
             let id = parseIntId(segs[3])
             if (id > 0) { handleAttendanceUpdate(ctx, id); return }

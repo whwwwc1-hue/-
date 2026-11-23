@@ -75,7 +75,7 @@
 
     <!-- Tabs -->
     <div class="hrms-card p-5">
-      <el-tabs v-model="activeTab">
+      <el-tabs v-model="activeTab" @tab-change="onTabChange">
         <el-tab-pane label="我的考勤记录" name="my">
           <div class="flex items-center justify-between mb-4">
             <el-date-picker
@@ -159,6 +159,74 @@
             />
           </div>
         </el-tab-pane>
+
+        <el-tab-pane v-if="canManageAttendance" label="月度汇总导出" name="summary">
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <el-date-picker
+              v-model="sumMonth"
+              type="month"
+              value-format="YYYY-MM"
+              placeholder="选择月份"
+              @change="loadMonthlySummary"
+            />
+            <el-select v-model="sumDeptId" placeholder="全部部门" clearable class="!w-44" @change="loadMonthlySummary">
+              <el-option v-for="d in deptOptions" :key="d.id" :label="d.deptName" :value="d.id" />
+            </el-select>
+            <el-button type="primary" :loading="sumLoading" :disabled="sumList.length === 0" @click="exportSummaryCsv">
+              一键导出 CSV
+            </el-button>
+            <span class="text-xs text-slate-400">
+              应出勤 {{ sumShouldDays }} 天/人（固定口径，不含法定节假日）；出勤率超过 100% 按 100% 显示
+            </span>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+            <div class="hrms-card p-4">
+              <div class="text-xs text-slate-400">统计人数</div>
+              <div class="text-lg font-bold text-slate-800 mt-1">{{ sumTotals.headcount ?? 0 }} 人</div>
+            </div>
+            <div class="hrms-card p-4">
+              <div class="text-xs text-slate-400">整体出勤率</div>
+              <div class="text-lg font-bold text-blue-600 mt-1">{{ sumTotals.attendanceRate ?? 0 }}%</div>
+            </div>
+            <div class="hrms-card p-4">
+              <div class="text-xs text-slate-400">合计出勤天数</div>
+              <div class="text-lg font-bold text-slate-800 mt-1">{{ sumTotals.actualAttendDays ?? 0 }} 天</div>
+            </div>
+            <div class="hrms-card p-4">
+              <div class="text-xs text-slate-400">迟到 / 早退次数</div>
+              <div class="text-lg font-bold text-amber-600 mt-1">
+                {{ sumTotals.lateCount ?? 0 }} / {{ sumTotals.earlyCount ?? 0 }}
+              </div>
+            </div>
+            <div class="hrms-card p-4">
+              <div class="text-xs text-slate-400">迟到 / 早退分钟</div>
+              <div class="text-lg font-bold text-amber-600 mt-1">
+                {{ sumTotals.lateMinutes ?? 0 }} / {{ sumTotals.earlyMinutes ?? 0 }}
+              </div>
+            </div>
+            <div class="hrms-card p-4">
+              <div class="text-xs text-slate-400">请假 / 加班（已批准）</div>
+              <div class="text-lg font-bold text-emerald-600 mt-1">
+                {{ sumTotals.leaveDays ?? 0 }} 天 / {{ sumTotals.overtimeHours ?? 0 }} h
+              </div>
+            </div>
+          </div>
+
+          <el-table :data="sumList" v-loading="sumLoading" stripe border max-height="460">
+            <el-table-column prop="deptName" label="部门" min-width="120" />
+            <el-table-column prop="empNo" label="工号" width="110" />
+            <el-table-column prop="empName" label="姓名" width="120" />
+            <el-table-column prop="attendDays" label="出勤天数" width="100" />
+            <el-table-column prop="attendanceRate" label="出勤率(%)" width="110" />
+            <el-table-column prop="lateCount" label="迟到次数" width="100" />
+            <el-table-column prop="earlyCount" label="早退次数" width="100" />
+            <el-table-column prop="lateMinutes" label="迟到(分)" width="100" />
+            <el-table-column prop="earlyMinutes" label="早退(分)" width="100" />
+            <el-table-column prop="leaveDays" label="请假(天)" width="100" />
+            <el-table-column prop="overtimeHours" label="加班(h)" width="100" />
+          </el-table>
+        </el-tab-pane>
       </el-tabs>
     </div>
 
@@ -199,10 +267,13 @@ import {
   clockInApi,
   clockOutApi,
   getAttendanceListApi,
+  getAttendanceMonthlySummaryApi,
+  getDeptTreeApi,
   getMyAttendanceApi,
   getTodayAttendanceApi,
   updateAttendanceApi
 } from '@/api/hrms'
+import type { AttendanceSummaryRow, AttendanceSummaryTotals } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -225,6 +296,16 @@ const allLoading = ref(false)
 const allList = ref<any[]>([])
 const allFilters = reactive({ keyword: '', month: '', status: '' })
 const allPagination = reactive({ page: 1, pageSize: 10, total: 0 })
+
+// P2.4 月度汇总（导出 CSV 与页面表格共用同一份 sumList / sumTotals，保证数字一致）
+const sumLoading = ref(false)
+const sumLoaded = ref(false)
+const sumMonth = ref(myMonth.value)
+const sumDeptId = ref<number | undefined>(undefined)
+const sumList = ref<AttendanceSummaryRow[]>([])
+const sumTotals = ref<Partial<AttendanceSummaryTotals>>({})
+const sumShouldDays = ref(22)
+const deptOptions = ref<{ id: number; deptName: string }[]>([])
 
 const fixDialogVisible = ref(false)
 const fixLoading = ref(false)
@@ -288,6 +369,123 @@ function searchAll() {
   loadAllAttendance()
 }
 
+/** 部门树是递归结构，导出筛选只需要一层下拉，按「父在前、子在后」拍平并加缩进。 */
+function flattenDeptTree(nodes: any[], depth: number, out: { id: number; deptName: string }[]) {
+  for (const n of nodes) {
+    out.push({ id: n.id, deptName: `${'　'.repeat(depth)}${n.deptName}` })
+    if (Array.isArray(n.children) && n.children.length > 0) {
+      flattenDeptTree(n.children, depth + 1, out)
+    }
+  }
+}
+
+async function loadMonthlySummary() {
+  if (!canManageAttendance.value) return
+  sumLoading.value = true
+  try {
+    const res = await getAttendanceMonthlySummaryApi({
+      month: sumMonth.value || undefined,
+      deptId: sumDeptId.value || undefined
+    })
+    sumList.value = res.list || []
+    sumTotals.value = res.summary || {}
+    sumShouldDays.value = res.shouldAttendDays || 22
+    sumLoaded.value = true
+  } finally {
+    sumLoading.value = false
+  }
+}
+
+function onTabChange(name: string | number) {
+  if (name !== 'summary' || !canManageAttendance.value) return
+  if (deptOptions.value.length === 0) {
+    getDeptTreeApi()
+      .then((nodes) => {
+        const flat: { id: number; deptName: string }[] = []
+        flattenDeptTree(nodes || [], 0, flat)
+        deptOptions.value = flat
+      })
+      .catch(() => {
+        // 部门列表只是筛选项，拉取失败不应阻断汇总本身
+        deptOptions.value = []
+      })
+  }
+  if (!sumLoaded.value) loadMonthlySummary()
+}
+
+/**
+ * 签到 / 签退 / 补卡修正都会改变当月考勤，已加载过的汇总必须跟着刷新；
+ * 否则「页面数字」和稍后导出的 CSV 会来自两次不同的数据快照。
+ */
+function refreshSummaryIfNeeded() {
+  if (canManageAttendance.value && sumLoaded.value) loadMonthlySummary()
+}
+
+/**
+ * CSV 单元格转义。姓名 / 部门是用户可编辑的自由文本，一旦含逗号或引号，
+ * 不转义会让整行列错位（Excel 里表现为「加班小时数跑到了请假列」）。
+ */
+function csvCell(v: string | number | undefined | null): string {
+  if (v === undefined || v === null) return ''
+  const s = String(v)
+  return /["\r\n,]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+/** 导出 CSV：数据源就是页面表格的 sumList/sumTotals，不做二次计算。 */
+function exportSummaryCsv() {
+  if (sumList.value.length === 0) {
+    ElMessage.warning('没有可导出的汇总数据')
+    return
+  }
+  const csvRow = (cells: (string | number | undefined | null)[]): string => cells.map(csvCell).join(',')
+  const lines: string[] = []
+  lines.push('部门,工号,姓名,出勤天数,应出勤天数,出勤率(%),迟到次数,早退次数,迟到(分钟),早退(分钟),请假(天),加班(小时)')
+  for (const row of sumList.value) {
+    lines.push(
+      csvRow([
+        row.deptName,
+        row.empNo,
+        row.empName,
+        row.attendDays,
+        sumShouldDays.value,
+        row.attendanceRate,
+        row.lateCount,
+        row.earlyCount,
+        row.lateMinutes,
+        row.earlyMinutes,
+        row.leaveDays,
+        row.overtimeHours
+      ])
+    )
+  }
+  const t = sumTotals.value
+  lines.push(
+    csvRow([
+      '合计',
+      '',
+      `${t.headcount ?? 0} 人`,
+      t.actualAttendDays ?? 0,
+      (t.headcount ?? 0) * sumShouldDays.value,
+      t.attendanceRate ?? 0,
+      t.lateCount ?? 0,
+      t.earlyCount ?? 0,
+      t.lateMinutes ?? 0,
+      t.earlyMinutes ?? 0,
+      t.leaveDays ?? 0,
+      t.overtimeHours ?? 0
+    ])
+  )
+  // BOM 头是给 Excel 看的：没有 \uFEFF，Excel 会把 UTF-8 中文按 GBK 打开成乱码
+  const blob = new Blob([`\uFEFF${lines.join('\r\n')}`], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `考勤月度汇总_${sumMonth.value || 'all'}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success(`已导出 ${sumList.value.length} 人的月度考勤汇总`)
+}
+
 async function handleClockIn() {
   clockLoading.value = true
   try {
@@ -295,6 +493,7 @@ async function handleClockIn() {
     ElMessage.success('签到成功')
     await loadMyAttendance()
     if (canManageAttendance.value) loadAllAttendance()
+    refreshSummaryIfNeeded()
   } finally {
     clockLoading.value = false
   }
@@ -307,6 +506,7 @@ async function handleClockOut() {
     ElMessage.success('签退成功')
     await loadMyAttendance()
     if (canManageAttendance.value) loadAllAttendance()
+    refreshSummaryIfNeeded()
   } finally {
     clockLoading.value = false
   }
@@ -338,6 +538,7 @@ async function submitFix() {
     fixDialogVisible.value = false
     await loadAllAttendance()
     await loadMyAttendance()
+    refreshSummaryIfNeeded()
   } finally {
     fixLoading.value = false
   }

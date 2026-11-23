@@ -34,6 +34,9 @@ const CHEN = {
 /** 调项把绩效奖金抬到 2710 后，应纳税所得跨进 20% 档的第二组权威值。 */
 const CHEN_ADJUSTED = { bonus: '2710', tax: '1142.56', net: '16620.26' } as const
 
+/** 一键核算覆盖的人数：mock 种子里 ACTIVE + PROBATION 共 5 人（RESIGNED 不参与）。 */
+const EMP_COUNT = 5
+
 /** 核算中心里按姓名锁定唯一一行。 */
 function adminRow(page: Page, name: string): Locator {
   return page.locator(`#pane-admin tr.el-table__row`).filter({ hasText: name })
@@ -240,6 +243,36 @@ test.describe('筛选与导出', () => {
     // 列表为空时导出必须被前端拦住，不会下载出一个只有表头的空文件
     await page.getByRole('button', { name: '导出 CSV' }).click()
     await expect(toast(page, '当前列表暂无可导出数据')).toBeVisible()
+  })
+
+  test('导出报表自己拉全量，而不是复用屏幕上那一页', async ({ page }) => {
+    await signIn(page, 'hr', '/payroll')
+    await generate(page)
+
+    // 屏幕上表格按 pageSize=10 分页，导出必须换成 100 一页把数据捞齐；
+    // 后端 handlePayrollList 把 pageSize>100 夹回 20（payroll_controller.cj:124），
+    // 所以 100 是能一次拿到的上限，也是这里唯一正确的取值。
+    const req = page.waitForRequest(
+      (r) => r.method() === 'GET' && new URL(r.url()).pathname === '/api/v1/payrolls'
+    )
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: '导出 CSV' }).click()
+    ])
+    const params = new URL((await req).url()).searchParams
+    expect(params.get('pageSize'), '导出要按 100 条一页拉全量').toBe('100')
+    expect(params.get('page')).toBe('1')
+    expect(params.get('payMonth')).toBe(PAYROLL_MONTH)
+    expect(download.suggestedFilename()).toBe(`payroll_${PAYROLL_MONTH}.csv`)
+
+    let text = ''
+    const stream = await download.createReadStream()
+    for await (const chunk of stream) text += Buffer.from(chunk as Uint8Array).toString('utf8')
+    const lines = text.replace(/^\uFEFF/, '').split('\n').filter((l) => l.length > 0)
+    // 表头 + 与 total 一致的数据行（不是当前页行数）
+    expect(lines.length).toBe(EMP_COUNT + 1)
+    expect(lines[0].split(',').length).toBe(12)
+    expect(lines.slice(1).filter((l) => l.includes(CHEN.empNo)).length).toBe(1)
   })
 
   test('关键字筛选只命中目标员工', async ({ page, mock }) => {
