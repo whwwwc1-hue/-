@@ -8,6 +8,46 @@ import hrms_backend.common.*
 import hrms_backend.middleware.*
 import hrms_backend.controller.*
 
+// 运行元信息（供 /health 计算运行时长）
+class ServerMeta {
+    public var startAt: Int64 = 0
+}
+
+let serverMeta = ServerMeta()
+
+// P0.2：健康检查必须真实探活，不能再无条件返回 UP。
+// 数据库不可用时返回 503，让容器编排 / 反向代理能够正确摘流。
+func handleHealth(ctx: HttpContext): Unit {
+    let (dbUp, dbInfo) = dbPing()
+    let (queryTotal, queryFailed) = dbStats()
+    let lastError = truncateUtf8(lastDbErrorMessage(), 300)
+    let statusText = if (dbUp) { "UP" } else { "DOWN" }
+    let message = if (dbUp) { "success" } else { "数据库不可用" }
+    let httpStatus: UInt16 = if (dbUp) { 200 } else { 503 }
+    let bizCode: Int64 = if (dbUp) { 200 } else { 503 }
+    let uptime = nowUnixSeconds() - serverMeta.startAt
+    let (trackedKeys, blockedKeys, totalFailures) = loginThrottleStats()
+    let data = "{\"status\":\"${statusText}\",\"uptimeSeconds\":${uptime},"
+        + "\"db\":{\"status\":\"${statusText}\",\"detail\":${jsonStr(truncateUtf8(dbInfo, 200))},\"lastError\":${jsonStr(lastError)}},"
+        + "\"stats\":{\"queryTotal\":${queryTotal},\"queryFailed\":${queryFailed}},"
+        + "\"loginThrottle\":{\"trackedKeys\":${trackedKeys},\"blockedKeys\":${blockedKeys},\"failures\":${totalFailures},\"totalBlocked\":${loginThrottleTotalBlocked()}},"
+        + "\"security\":{\"warnings\":${securityWarningsJson()}}}"
+    sendJson(ctx, httpStatus, bizCode, message, data)
+}
+
+// 把启动期安全自检结果暴露给 /health，便于自动化巡检发现「还在用示例密钥」。
+func securityWarningsJson(): String {
+    let warnings = globalConfig.securityWarnings()
+    var json = "["
+    for (i in 0..warnings.size) {
+        if (i > 0) {
+            json = "${json},"
+        }
+        json = "${json}${jsonStr(warnings[i])}"
+    }
+    return "${json}]"
+}
+
 func seedDefaultUsers(): Unit {
     let cnt = querySingleInt("SELECT COUNT(*) FROM sys_user", 0)
     if (cnt > 0) {
@@ -26,6 +66,35 @@ INSERT INTO sys_user (username, password_hash, role, employee_id, is_active) VAL
     }
 }
 
+// P0.3：把环境/配置问题在启动阶段就说清楚，而不是等第一个请求 500。
+func printStartupDiagnostics(): Unit {
+    let secretState = describeJwtSecret()
+    println("==================================================")
+    println("HRMS Cangjie Backend 启动自检")
+    println("  监听地址  : http://127.0.0.1:${globalConfig.serverPort}")
+    println("  数据库    : ${globalConfig.dbUser}@${globalConfig.dbHost}:${globalConfig.dbPort}/${globalConfig.dbName}")
+    println("  mysql.exe : ${globalConfig.mysqlExe}")
+    println("  临时目录  : ${globalConfig.tempDir}")
+    println("  查询超时  : ${globalConfig.dbTimeoutSec}s")
+    println("  JWT 密钥  : ${secretState}, 长度 ${globalConfig.jwtSecret.size}")
+    println("  STRICT_ENV: ${globalConfig.strictEnv}")
+    let warnings = globalConfig.securityWarnings()
+    for (w in warnings) {
+        println("  [安全告警] ${w}")
+    }
+    println("==================================================")
+}
+
+func describeJwtSecret(): String {
+    if (globalConfig.jwtSecretIsDefault) {
+        return "内置示例（不安全）"
+    }
+    if (globalConfig.jwtSecret.size < MIN_JWT_SECRET_LEN) {
+        return "自定义但过短（不安全）"
+    }
+    return "自定义（合规）"
+}
+
 func dispatchRequest(ctx: HttpContext): Unit {
     if (handleCorsPreflight(ctx)) {
         return
@@ -35,9 +104,9 @@ func dispatchRequest(ctx: HttpContext): Unit {
         let path = ctx.request.url.path
         let segs = parsePathSegments(path)
 
-        // /api/v1/health
+        // /api/v1/health：真实探活，DB 不可用时返回 503
         if (segs.size == 3 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "health" && method == "GET") {
-            sendOk(ctx, "{\"status\":\"UP\"}")
+            handleHealth(ctx)
             return
         }
 
@@ -159,8 +228,39 @@ class AppDistributor <: HttpRequestDistributor {
 }
 
 main(): Int64 {
-    ensureTempDir()
-    seedDefaultUsers()
+    serverMeta.startAt = nowUnixSeconds()
+    printStartupDiagnostics()
+
+    // P0.3 fail-fast：严格模式下带着不合规的密钥启动是不允许的。
+    if (globalConfig.strictEnv && globalConfig.securityWarnings().size > 0) {
+        eprintln("[FATAL] STRICT_ENV=1，但存在安全配置问题，拒绝启动。请修复上述告警后重试。")
+        return 1
+    }
+
+    try {
+        ensureTempDir()
+    } catch (e: Exception) {
+        eprintln("[FATAL] 临时目录初始化失败: ${e.message}")
+        eprintln("        请设置 TMP_SQL_DIR 指向一个纯英文、可写的目录，例如 D:\\hrms_tmp")
+        return 1
+    }
+
+    try {
+        seedDefaultUsers()
+    } catch (e: Exception) {
+        // P0.1 之后数据访问层不再静默吞异常，这里把根因直接摊给开发者。
+        eprintln("[WARN] 初始化演示账号失败：${e.message}")
+        eprintln("       可能原因：MySQL 未启动 / 账号口令错误 / ${globalConfig.dbName} 未建库。")
+        let (dbUp, dbInfo) = dbPing()
+        if (dbUp) {
+            eprintln("       连通性探测：正常（${dbInfo}），请确认 hrms_db 中已建表。")
+        } else {
+            eprintln("       连通性探测：失败（${dbInfo}）。")
+        }
+        eprintln("       建库脚本：sql/init_db.sql；Windows 可用 scripts/init-db.ps1")
+        eprintln("       服务仍会启动，但所有依赖数据库的接口将返回 500。")
+    }
+
     let server = ServerBuilder()
         .addr("127.0.0.1")
         .port(globalConfig.serverPort)
@@ -168,6 +268,7 @@ main(): Int64 {
         .build()
     server.logger.level = LogLevel.WARN
     println("HRMS Cangjie Backend listening on http://127.0.0.1:${globalConfig.serverPort}")
+    println("健康检查: GET http://127.0.0.1:${globalConfig.serverPort}/api/v1/health")
     server.serve()
     return 0
 }

@@ -37,8 +37,19 @@ request.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
+// P0.3：后端在 /auth/me 里做滑动续期，新 token 通过响应头 X-Renewed-Token 回发。
+// 这里统一拦截，任何响应带上该头就替换本地存储，用户无需重新登录。
+function adoptRenewedToken(headers: Record<string, unknown> | undefined) {
+  if (!headers) return
+  const raw = headers['x-renewed-token'] ?? headers['X-Renewed-Token']
+  if (typeof raw === 'string' && raw.length > 0) {
+    localStorage.setItem('hrms_token', raw)
+  }
+}
+
 request.interceptors.response.use(
   (response) => {
+    adoptRenewedToken(response.headers as unknown as Record<string, unknown>)
     const res = response.data
     if (res && typeof res.code === 'number') {
       if (res.code === 200) {

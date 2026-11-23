@@ -30,6 +30,9 @@ public func addCorsHeaders(builder: HttpResponseBuilder): HttpResponseBuilder {
         .header("Access-Control-Allow-Origin", "*")
         .header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
         .header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        // P0.3：/auth/me 通过响应头回发续签后的 token，跨域时必须显式暴露，
+        // 否则浏览器 JS 读不到该头。
+        .header("Access-Control-Expose-Headers", "X-Renewed-Token")
 }
 
 public func sendJson(ctx: HttpContext, httpStatus: UInt16, code: Int64, message: String, dataJson: String): Unit {
@@ -37,6 +40,16 @@ public func sendJson(ctx: HttpContext, httpStatus: UInt16, code: Int64, message:
     addCorsHeaders(ctx.responseBuilder)
         .status(httpStatus)
         .header("Content-Type", "application/json; charset=utf-8")
+        .body(body)
+}
+
+// P0.3：带续签 Token 的成功响应（响应头 X-Renewed-Token）。
+public func sendJsonWithToken(ctx: HttpContext, renewedToken: String, dataJson: String): Unit {
+    let body = "{\"code\":200,\"message\":\"success\",\"data\":${dataJson}}"
+    addCorsHeaders(ctx.responseBuilder)
+        .status(200)
+        .header("Content-Type", "application/json; charset=utf-8")
+        .header("X-Renewed-Token", renewedToken)
         .body(body)
 }
 
@@ -140,6 +153,24 @@ public func formatNum2(val: Float64): String {
     let fracStr = if (frac < 10) { "0${frac}" } else { "${frac}" }
     let prefix = if (neg && cents > 0) { "-" } else { "" }
     return "${prefix}${whole}.${fracStr}"
+}
+
+// 按字节上限截断，且保证不会把一个多字节 UTF-8 字符切成半个（否则响应体非法）
+public func truncateUtf8(text: String, maxBytes: Int64): String {
+    if (maxBytes <= 0) {
+        return ""
+    }
+    let bytes = text.toArray()
+    if (bytes.size <= maxBytes) {
+        return text
+    }
+    let contLow: UInt8 = 0x80
+    let contHigh: UInt8 = 0xBF
+    var cut = maxBytes
+    while (cut > 0 && bytes[cut] >= contLow && bytes[cut] <= contHigh) {
+        cut = cut - 1
+    }
+    return text[..cut]
 }
 
 public func round2(val: Float64): Float64 {

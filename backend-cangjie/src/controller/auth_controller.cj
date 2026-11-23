@@ -60,9 +60,19 @@ public func handleAuthLogin(ctx: HttpContext): Unit {
                 sendErr(ctx, 400, 400, "请输入账号和密码")
                 return
             }
+            // P0.3：失败限流。键 = 用户名 + 来源标识，避免同一账号被无限爆破。
+            let tkey = loginThrottleKey(username, clientIp(ctx))
+            let blocked = loginBlockedSeconds(tkey)
+            if (blocked > 0) {
+                writeAuditLogRaw(0, username, "系统认证", "登录被拒", "失败次数过多，${blocked} 秒内禁止重试")
+                sendErr(ctx, 429, 429, "登录失败次数过多，请 ${blocked} 秒后重试")
+                return
+            }
             let rows = queryRows("SELECT id, username, password_hash, role, IFNULL(employee_id, 0), is_active FROM sys_user WHERE username = ${sqlStr(username)} LIMIT 1")
             if (rows.size == 0) {
-                sendErr(ctx, 400, 400, "账号或密码错误")
+                let remain = remainingAfterFailure(loginRemainingAttempts(tkey))
+                recordLoginFailure(tkey)
+                sendErr(ctx, 400, 400, "账号或密码错误（剩余尝试 ${remain} 次）")
                 return
             }
             let r = rows[0]
@@ -73,12 +83,21 @@ public func handleAuthLogin(ctx: HttpContext): Unit {
             let empId = Int64.tryParse(r[4]) ?? 0
             let isActive = r[5]
             if (!verifyPassword(password, pwdHash)) {
-                sendErr(ctx, 400, 400, "账号或密码错误")
+                let remain = remainingAfterFailure(loginRemainingAttempts(tkey))
+                recordLoginFailure(tkey)
+                writeAuditLogRaw(uid, uname, "系统认证", "登录失败", "用户 ${uname} 密码校验未通过")
+                sendErr(ctx, 400, 400, "账号或密码错误（剩余尝试 ${remain} 次）")
                 return
             }
             if (isActive != "1") {
                 sendErr(ctx, 403, 403, "账号已被禁用，请联系管理员")
                 return
+            }
+            clearLoginFailures(tkey)
+            // P0.3：口令哈希静默升级。遗留「全局固定盐 SHA-256」在首次成功登录时
+            // 自动改写为「每用户随机盐 + 迭代派生」格式，无需用户改密码。
+            if (needsRehash(pwdHash)) {
+                executeSql("UPDATE sys_user SET password_hash = ${sqlStr(hashPassword(password))} WHERE id = ${uid}")
             }
             executeSql("UPDATE sys_user SET last_login_at = NOW() WHERE id = ${uid}")
             let token = createToken(uid, uname, role, empId)
@@ -92,7 +111,13 @@ public func handleAuthMe(ctx: HttpContext): Unit {
     match (requireAuth(ctx)) {
         case None => return
         case Some(u) =>
-            sendOk(ctx, buildUserProfileJson(u.userId))
+            // 契约保持不变：data 依然是扁平的用户档案。
+            // P0.3 的滑动续期通过响应头 X-Renewed-Token 回发，避免破坏前端既有取值逻辑。
+            let userJson = buildUserProfileJson(u.userId)
+            match (renewTokenIfExpiring(u)) {
+                case None => sendOk(ctx, userJson)
+                case Some(fresh) => sendJsonWithToken(ctx, fresh, userJson)
+            }
     }
 }
 

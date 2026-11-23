@@ -1,11 +1,21 @@
 package hrms_backend.config
 
+import std.collection.*
 import std.env.*
 import std.fs.*
 import std.convert.*
 
 // 内置示例密钥，仅用于开发演示；线上必须通过 JWT_SECRET 覆盖
 let DEFAULT_JWT_SECRET = "hrms_cangjie_jwt_secret_key_2026"
+
+// HS256 密钥最小长度：与 SHA-256 分组一致（32 字节），低于此值视为弱密钥
+public let MIN_JWT_SECRET_LEN: Int64 = 32
+
+// 内置示例口令，仅用于本地演示
+let DEFAULT_DB_PASS = "root"
+
+// ASCII 上界，用于识别路径里的中文/全角字符
+let ASCII_UPPER: UInt8 = 127
 
 public class AppConfig {
     public var dbHost: String = "127.0.0.1"
@@ -22,14 +32,14 @@ public class AppConfig {
     // 临时 SQL 文件目录：TMP_SQL_DIR 优先，缺省使用系统临时目录，不再硬编码原作者机器路径
     public var tempDir: String = "tmp_sql"
 
-    // 单条 SQL 子进程执行超时（秒），防止 MySQL 挂起导致请求线程无限阻塞
+    // mysql.exe --connect-timeout（秒），防止 MySQL 不可达时请求线程长时间挂起
     public var dbTimeoutSec: Int64 = 10
-
-    // 并发执行 SQL 的最大数量，避免瞬时请求把 mysql.exe 进程数打满
-    public var dbMaxConcurrency: Int64 = 4
 
     // 是否仍在使用内置示例密钥
     public var jwtSecretIsDefault: Bool = true
+
+    // 数据库口令是否仍是内置示例值 root
+    public var dbPassIsDefault: Bool = true
 
     // 严格环境模式：为真时，密钥不合规直接拒绝启动
     public var strictEnv: Bool = false
@@ -43,6 +53,7 @@ public class AppConfig {
         this.dbName = readEnvOrDefault("DB_NAME", this.dbName)
         this.jwtSecret = readEnvOrDefault("JWT_SECRET", this.jwtSecret)
         this.jwtSecretIsDefault = (this.jwtSecret == DEFAULT_JWT_SECRET)
+        this.dbPassIsDefault = (this.dbPass == DEFAULT_DB_PASS)
         this.strictEnv = isTruthyEnv("STRICT_ENV")
         this.mysqlExe = resolveMysqlExe()
         this.tempDir = resolveTempDir()
@@ -52,16 +63,40 @@ public class AppConfig {
                 this.dbTimeoutSec = t
             }
         }
-        let concurrencyStr = readEnvOrDefault("DB_MAX_CONCURRENCY", "4")
-        if (let Some(c) <- Int64.tryParse(concurrencyStr)) {
-            if (c > 0) {
-                this.dbMaxConcurrency = c
-            }
-        }
         let portStr = readEnvOrDefault("SERVER_PORT", "8080")
         if (let Some(p) <- UInt16.tryParse(portStr)) {
             this.serverPort = p
         }
+    }
+
+    // P0.3：启动期安全自检。返回所有需要人工处理的风险项；
+    // strictEnv 为真时非空即应拒绝启动（fail-fast），否则仅打印告警。
+    public func securityWarnings(): ArrayList<String> {
+        let out = ArrayList<String>()
+        if (jwtSecretIsDefault) {
+            out.add("JWT_SECRET 仍为内置示例密钥，必须用环境变量或 .env 覆盖")
+        }
+        if (jwtSecret.size < MIN_JWT_SECRET_LEN) {
+            out.add("JWT_SECRET 长度 ${jwtSecret.size} 小于 HS256 推荐下限 ${MIN_JWT_SECRET_LEN}")
+        }
+        if (dbPassIsDefault) {
+            out.add("DB_PASS 仍为内置示例口令 root，生产环境请更换")
+        }
+        if (tempDirIsInsecure()) {
+            out.add("临时 SQL 目录 ${tempDir} 含非 ASCII 字符，mysql.exe 可能无法 SOURCE")
+        }
+        return out
+    }
+
+    // 路径含非 ASCII 时 mysql.exe --execute "SOURCE ..." 会因控制台代码页打不开文件
+    private func tempDirIsInsecure(): Bool {
+        var found = false
+        for (b in tempDir.toArray()) {
+            if (b > ASCII_UPPER) {
+                found = true
+            }
+        }
+        return found
     }
 
     // TMP_SQL_DIR -> TEMP -> TMP -> 相对目录，保证任何机器上都能拿到可写目录
