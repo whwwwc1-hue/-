@@ -439,6 +439,7 @@
 | 2026-11-24 | **P3.2 通知中心：前端 + mock + E2E（本轮接上「继续」后的第二批）** | 12.15 第⑤项欠债清单已按序兑付 4 项（第 5 项「建 sys_user 测试账号」仍欠，见 L-NOTIF-3） | ① `notification_controller_test.cj` **727 行 / 64 `@TestCase` / 164 `@Assert`**，期望值由 TEMP 下两份 node 镜像脚本独立复算并**整行逐字回核**（第一批 39 pins / 第二批 56 pins，各 0 MISS）；② `hrms.ts` 4 接口 + `AppLayout.vue` 铃铛 `el-badge` + 抽屉 + 30s 轮询 + 按 `type` 跳转；③ `mock-server.ts` **分发 28 → 32** + 3 个触发点镜像（`onApproveRequest`/`onPaySingle`/`onBatchPay`/`onOverview`）；④ `e2e/notification.spec.ts` **351 行 / 9 用例**。为让跳转成立，`PayrollView.vue` / `ApprovalView.vue` 补了认 `route.query.tab` 的能力（后者还要求 `canApprove`）。三连全绿、`playwright test --list` = **77 tests / 9 files**（原 68 / 8）、全量 **77 passed**。踩了 5 个坑全部记进 12.15 ⑥，其中两个改了**既存**用例：`el-drawer` 自带 `<header>` 撞 strict mode（改 `:with-header="false"`）、全局 `unread-count` 打进两条「本模块不该发别的接口」的闸门（只放行这一条具体路径） |
 | 2026-11-24 | **用户指令再次变更（优先级 + 交付节奏）** | 原话：「这次主要方向是增加必要的功能，要体现工作量，可以适当减轻那些如安全性的开发内容，因为体现不出工作量大小。你每完成一批功能后注意要更新到仓库中的zc分支」 | ① 覆盖「先做记号、过几天再提交」——改为**每完成一批就 commit + push `zc`**；② 安全加固类（注入面、越权矩阵、`sqlSafety` 断言）**降级为顺带产出，不再单独开工**，因为它的行数体现不出功能量；③ 下一批 = **P4.1 培训与学分**（建表 + 控制器 + 路由 + 前端页 + 仓颉单测 + mock 分发 + E2E 全链路一次做完） |
 | 2026-11-24 | **计量纠偏（第三次）**：`powershell -File` 子进程看到的是**过期文件系统快照** | 同一份 `notification_controller_test.cj`，脚本内 `Get-Content` 报 690 行、内联命令报 727 行（`Read` 工具末行号 727 为权威）；`notification_controller.cj` 同样报 432 vs 470 | 台账里所有行数/条数**只用内联命令、`Read` 末行号或 `git --numstat` 取**，不得用 `-File` 跑的脚本回填。本节新写的 9 files / 1571(+) / 10(−) 与 55 files / 15170 / 152 均取自 `git diff --numstat` 与 `git diff --shortstat 6e79923 HEAD`（提交后须复跑对账，命令见 13.5 口径 1） |
+| 2026-11-25 | **P3.2 第二批已提交并推送 `zc`** | commit **`62a42e8`**：`10 files / 1644(+), 47(−)`；代码口径 `git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"` = **56 files / 15165(+), 147(−)**，与 13.5 表内数字一致（暂存前后各复跑一次，无漂移） | ① 按新指令兑现「每批功能推一次 zc」；② 推送前把同源残留的 **432 → 470、690 → 727、318 → 351** 三处错数改正为内联实测值，并把 ④ 的「68 tests in 8 files」标注为第一批状态（第二批为 77 / 9）；③ **推送方式变更**：local config 里的 `http.proxy=127.0.0.1:7890` 已失效（端口无监听、`ProxyEnable` 回 0），改用 `git -c http.proxy= -c https.proxy= push` **直连成功** `b4427b1..62a42e8`，详见 13.6 的状态变更块；④ 下一批立即开工 **P4.1 培训与学分** |
 
 
 ---
@@ -1323,6 +1324,13 @@ git config --local https.proxy http://127.0.0.1:7890
 ```
 
 复测命令：`git ls-remote --heads origin`；若代理端口变化导致失败，改这两行即可。
+
+> **2026-11-25 状态变更（P3.2 第二批推送时实测）**：`127.0.0.1:7890` 上已无进程监听（`Get-NetTCPConnection -State Listen -LocalPort 7890`
+> 返回空，`HKCU` 的 `ProxyEnable` 也变回 0），带 `http.proxy` 的推送因此 `Failed to connect to 127.0.0.1 port 7890`。
+> 但**清空代理后直连可用**：`git -c http.proxy= -c https.proxy= push origin HEAD:refs/heads/zc` ⇒ `b4427b1..62a42e8  HEAD -> zc`，exit 0。
+> 结论：代理只是当时的兜底，**不是永久前提**。今后推送先试
+> `git -c http.proxy= -c https.proxy= push origin HEAD:refs/heads/zc`；仅当它失败且 `github.com:443` 也连不通时，才恢复带代理的写法。
+> ⚠️ 不要用不带任何 `-c` 的裸 `git push`：它会读上面写入 local config 的两行，代理一停就必然失败。
 
 **L-CI-1 仍为开放**：`GET https://api.github.com/repos/whwwwc1-hue/-/actions/runs?per_page=5` 实测 `total_count=0`。
 成因不是失败而是**没触发** —— [ci.yml](./.github/workflows/ci.yml) 的 `push.branches` 只列 `main`/`master`，
