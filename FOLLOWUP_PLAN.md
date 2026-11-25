@@ -317,6 +317,8 @@
 ## 六、任务包 P4：新业务模块（对应指南工作包 D，按第六节 SOP 落地）
 
 - [ ] **P4.1 培训与学分**：`hr_training` + `hr_training_record`；HR 发布计划、员工报名、签到、学分汇总；`/api/v1/trainings` 全套路由注册 + `TrainingView.vue` + 菜单项。
+      **进度（2026-11-26）**：后端已交付 —— 两张表 + `training_controller.cj`(1478) + 11 条路由 + 36 类单测(1070)，真库 13 组 SQL 实测通过，见 12.16。
+      **未做**：`api/hrms.ts` 培训 API、`TrainingView.vue`、`router` 的 `meta.roles`、`AppLayout` 的 `menuItems`/`notifRoutes`、`mock-server` 分发、`e2e/training.spec.ts`、`rbac-menu.spec.ts` 四角色 `MENUS`。
 - [ ] **P4.2 差旅与报销**：`hr_expense`（`DRAFT → SUBMITTED → APPROVED → PAID`），复用审批视图风格；审批通过与月度发薪联动（报销金额进入薪资明细，注意与 P0.1 的事务边界）。
 
 **验收**：两个模块各自完成「建表 → 控制器 → 路由注册 → api → 视图 → 路由 meta.roles → 菜单」七步闭环，前端可增删改查且 RBAC 生效。
@@ -440,6 +442,7 @@
 | 2026-11-24 | **用户指令再次变更（优先级 + 交付节奏）** | 原话：「这次主要方向是增加必要的功能，要体现工作量，可以适当减轻那些如安全性的开发内容，因为体现不出工作量大小。你每完成一批功能后注意要更新到仓库中的zc分支」 | ① 覆盖「先做记号、过几天再提交」——改为**每完成一批就 commit + push `zc`**；② 安全加固类（注入面、越权矩阵、`sqlSafety` 断言）**降级为顺带产出，不再单独开工**，因为它的行数体现不出功能量；③ 下一批 = **P4.1 培训与学分**（建表 + 控制器 + 路由 + 前端页 + 仓颉单测 + mock 分发 + E2E 全链路一次做完） |
 | 2026-11-24 | **计量纠偏（第三次）**：`powershell -File` 子进程看到的是**过期文件系统快照** | 同一份 `notification_controller_test.cj`，脚本内 `Get-Content` 报 690 行、内联命令报 727 行（`Read` 工具末行号 727 为权威）；`notification_controller.cj` 同样报 432 vs 470 | 台账里所有行数/条数**只用内联命令、`Read` 末行号或 `git --numstat` 取**，不得用 `-File` 跑的脚本回填。本节新写的 9 files / 1571(+) / 10(−) 与 55 files / 15170 / 152 均取自 `git diff --numstat` 与 `git diff --shortstat 6e79923 HEAD`（提交后须复跑对账，命令见 13.5 口径 1） |
 | 2026-11-25 | **P3.2 第二批已提交并推送 `zc`** | commit **`62a42e8`**：`10 files / 1644(+), 47(−)`；代码口径 `git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"` = **56 files / 15165(+), 147(−)**，与 13.5 表内数字一致（暂存前后各复跑一次，无漂移） | ① 按新指令兑现「每批功能推一次 zc」；② 推送前把同源残留的 **432 → 470、690 → 727、318 → 351** 三处错数改正为内联实测值，并把 ④ 的「68 tests in 8 files」标注为第一批状态（第二批为 77 / 9）；③ **推送方式变更**：local config 里的 `http.proxy=127.0.0.1:7890` 已失效（端口无监听、`ProxyEnable` 回 0），改用 `git -c http.proxy= -c https.proxy= push` **直连成功** `b4427b1..62a42e8`，详见 13.6 的状态变更块；④ 下一批立即开工 **P4.1 培训与学分** |
+| 2026-11-26 | **P4.1 培训与学分：后端 + 仓颉单测已交付（前端/E2E 未做）** | 建表 2 张（`hr_training` / `hr_training_record`）+ `training_controller.cj` **1478 行**（46 纯函数 + 11 handler）+ `main.cj` **11 条路由** + `notification_controller.cj` 接 `TRAINING_PUBLISHED` + `training_controller_test.cj` **36 类 / 93 TC / 255 AS**；逐文件与真库实测见 **12.16** | ① 按用户指令只做功能、不开安全类工作；② 单测期望值全部由 node 镜像程序化生成（12.16 ④），并借此抓到 `formatNum2` 镜像与真实实现不一致（`1.5` vs 正确 `1.50`）；③ 两处**反向结论**已记录：L1026 的嵌套双引号插值经全库扫描确认基线有 5 处先例（不改），`check_test.js` 的 `oddQuoteLines=[482]` 是脚本误报；④ 本批按 P3.2 的两段式先例**只提交后端切片**，前端与 E2E 留待下次，未跑三连与 Playwright（本批无前端改动，不影响基线 77 passed） |
 
 
 ---
@@ -1198,6 +1201,85 @@ npx playwright test e2e/approval.spec.ts --grep "长假" --workers=1
 我没有为它单独加安全断言——按用户本轮指令（「适当减轻那些如安全性的开发内容，因为体现不出工作量大小」），
 这部分只在 ⑤4 里留了一条越权 404 的 E2E 兜底，不再展开注入面/矩阵类工作。
 
+### 12.16 P4.1 培训与学分（后端切片，本次提交）的测量值
+
+> 本批只交付**后端 + 仓颉单测**，前端视图 / mock 分发 / E2E 留作下一批（原因见本节 ⑤ 与第九节 11-26 行）。
+> 这与 P3.2 的两段式交付同构（`b4427b1` 后端 → `62a42e8` 前端/测试），刻意不把半成品混进一个提交里。
+
+**① 逐文件 `numstat`（对比 `HEAD`，即 `62a42e8`）**：
+
+| 文件 | +/- | 说明 |
+| --- | --- | --- |
+| `backend-cangjie/src/controller/training_controller.cj` | **1478 / 0**（新文件） | 培训域全部业务逻辑；行号索引见 ② |
+| `backend-cangjie/src/controller/training_controller_test.cj` | **1070 / 0**（新文件） | 36 个 `@test` 类 / 93 个 `@TestCase` / 255 个 `@Assert`，见 ③ |
+| `backend-cangjie/src/main.cj` | 23 / 2 | 11 条路由注册（固定段 `available`/`my`/`stats` 必须排在 `/:id` 之前） |
+| `sql/init.sql` | 64 / 4 | 表 14 `hr_training`（L358）+ 表 15 `hr_training_record`（L380）+ 种子（L996+） |
+| `backend-cangjie/src/controller/notification_controller.cj` | 2 / 0 | `TRAINING_PUBLISHED` 接入 `notifIsValidType` / `notifTypeLabel`（「培训新课上线」） |
+| **合计** | **5 files / 2637(+), 6(−)** | 命令：`git diff --cached --numstat HEAD -- . ":(exclude)FOLLOWUP_PLAN.md"` |
+
+**② `training_controller.cj` 的结构（`Select-String '^public func'` 实测行号，可复跑）**：
+纯函数区 46 个（`trainingIsValidStatus:28` 起，含状态机 `trainingStatusTransition:83`、钳位 `trainingClamp*:133/141/154`、
+学分折算 `trainingCreditOf:167`、名额 `trainingCapacityLeft:182`、五道闸门 `trainingAudienceDenied:194` /
+`trainingSignupDenied:207` / `trainingCheckinDenied:224` / `trainingUnsignupDenied:245` / `trainingResultDenied:262`、
+SQL 生成 20 个、行→JSON 6 个），处理器 11 个（`handleTrainingList:738` … `handleTrainingResult:1193`）。
+**路由与处理器 1:1**：main.cj 11 条 ↔ 11 个 handler，无孤儿注册、无未挂路由的 handler。
+
+**③ 仓颉单测的结构测量（`node check_test.js` 实跑输出，非估算）**：
+
+```
+lines=1071 classes=36 testcases=93 asserts=255
+dup=[]            # 无重复 @test 类名
+over3=[]          # 无单类 >3 个 @TestCase（11.2 纪律）
+braceDepth=0 negative=0
+oddQuoteLines=[482] count=1
+```
+
+`oddQuoteLines=[482]` 已单独复核，**是自检脚本的误报、不是代码缺陷**：该行含字面量 `"\\"`
+（转义反斜杠紧跟闭引号），脚本「前一字符是 `\` 即视为转义」的规则无法处理 `\\` 自身的转义。
+手工按仓颉词法逐字符配对：串 1 `"\\"` = 单个反斜杠，串 2 为 expected，均闭合。
+
+**④ 期望值的生产方式（本机无仓颉 SDK，L-CJ-1 的替代取证链）**：
+`training_controller_test.cj` **不是手写的**，由三个 node 脚本程序化生成，避免手抄长 SQL 串造成字节漂移：
+
+| 脚本 | 作用 | 实测输出 |
+| --- | --- | --- |
+| `train_mirror.js` | 逐字复刻仓颉纯函数 + 从 `.cj` 里抽取 `"""` SQL 模板 | — |
+| `train_gen.js` | 生成规则/SQL 用例的期望值 | `cases=144 lines=288`，无 BAD CASE |
+| `train_testgen.js` | 渲染整个 `.cj` 测试文件 | `classes=36 testcases=93 asserts=255 lines=914`（+157 行辅助/注释 = ③ 的 1071） |
+
+生成链纠错两处（都属**镜像与真实实现不一致**，若不修会污染整批 SQL 断言）：
+1. `formatNum2` 镜像原用 `Math.round(f*100)/100`，产出 `1.5`；真实 `response.cj` 用 cents 算法，
+   产出 **`1.50`**（永远两位小数）。已按源码逐字重写，影响 `trainingInsertSql` / `trainingUpdateSet` /
+   `trainingCreditChangedSql` / `trainingSettleCreditSql` / `trainingResultSql` 五处期望串。
+2. `templates()` 原按「含 `${` 的行」抽模板，漏掉纯常量串 `trainingScoreAvgSql` / `trainingCoveredEmpSql`；
+   放宽为「函数体内全部字符串字面量」后补齐。
+
+**⑤ 一条编译风险的反向结论（差点改错）**：
+`training_controller.cj:1026` 在 `"..."` 单行串的 `${}` 里嵌了 `"0"`（`trainingNumCol(o, 0, "0")`）。
+我先按「基线无先例」判定为风险，写了 `chk_nest.js` 全库扫描 35 个 `.cj`：命中 6 行，其中 **5 行属基线已编译代码**
+（`auth_controller.cj:34`、`system_controller.cj:35`、`attendance_controller.cj:164`、
+`performance_controller.cj:35`、`dashboard_controller.cj:119`）⇒ 该写法在仓颉中合法，**不改**。
+先前的「0 先例」结论是我第一版 grep 正则（只匹配 `${函数(`）+ `head_limit` 截断共同造成的假阴性。
+
+**⑥ 真库（MySQL 8.0 / `hrms_db`）实测**：
+`verify_training.sql` 13 组 SQL 全部跑通；要点三条——
+时间语义交给 `TIMESTAMPDIFF`（非法日期 → `NULL` → `querySingleInt(..., -1)` 回退 −1 → 谓词 false；跨度符号 +480/−480 正确）、
+`AVG(score)` 输出 `71.50000`、`IFNULL(CAST(r.score AS CHAR),'null')` 输出字面量 `null`
+（这是「未考核 ≠ 0 分」在 SQL 侧的落地方式，仓颉侧对应 `-1.0` 哨兵）。
+受众命中路径复测：`dept_id=2` 的课命中 user id 3、4；`dept_id=0` 的全员课命中 4 行。
+演示账号由 `seed_users.sql` 补齐（admin/hr/manager/emp01，口令 `123456`，
+哈希用 `SHA2(CONCAT('HRMS_CANGJIE_2026_SALT:','123456'),256)` 直接 SQL 复现）。
+
+**⑦ 本批明确未做（下一批的确定范围，不含任何安全类工作）**：
+`api/hrms.ts` 培训 API 与 interface、`views/training/TrainingView.vue`、`router/index.ts` 的 `meta.roles`、
+`AppLayout.vue` 的 `menuItems` 与 `notifRoutes`（`TRAINING_PUBLISHED` → `/training`）、
+`mock-server.ts` 约 10 条分发、`e2e/training.spec.ts`、`rbac-menu.spec.ts` 四个角色的 `MENUS` 数组，
+以及三连（`vue-tsc` / `eslint --max-warnings 0` / `build`）与全量 Playwright（基线 **77 passed / 9 files**）。
+**接口契约已按源码钉死**（后端出参键名，前端 interface 的唯一依据）：
+计划行 15 列含 `credit`/`signedCount`/`attendedCount`；员工课程行 17 列含 `capacityLeft`/`canSignup`/`canCheckin`/
+`canUnsignup`/`blockReason`/`myStatusLabel`；记录行 13 列用 `courseCredit`（与计划行的 `credit` **不同名**，
+这是最容易被前端抄错的一处）；名册 11 列；排行 4 列；课程统计 6 列。
+
 ---
 
 ## 十三、远端仓库现状与推送方案（2026-11-23 实测，非推测）
@@ -1266,7 +1348,8 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 | 我：`7174898` P3.1 长假二级审批（**已提交**） | **8 files / 1364 insertions(+), 64 deletions(-)**；排除本文档（173/6）= **7 files / 1191(+), 58(−)**，逐项见 12.14 |
 | 我：`b4427b1` P3.2 通知中心（**后端已提交**） | **7 files / 666 insertions(+), 9 deletions(-)**；排除本文档（139/7）= **6 files / 527(+), 2(−)**（`notification_controller.cj` 470/0、`main.cj` 11/0、`request_controller.cj` 10/0、`dashboard_controller.cj` 9/1、`payroll_controller.cj` 8/1、`init.sql` 19/0），逐项见 12.15 |
 | 我：P3.2 通知中心（**前端/测试/单测，本次提交**） | **9 files / 1571 insertions(+), 10 deletions(-)**：新增 `notification_controller_test.cj` 727/0、`e2e/notification.spec.ts` 351/0；改动 `AppLayout.vue` 147/2、`mock-server.ts` 287/2（分发 28→32）、`hrms.ts` 27/0、`ApprovalView.vue` 12/2、`PayrollView.vue` 11/1、`rbac-menu.spec.ts` 5/1、`payroll.spec.ts` 4/2。⚠️ 逐文件数字取自**暂存后**的 `git diff --cached --numstat`（`git add -A` 会把这些 LF 文件按 `core.autocrlf` 归一化，暂存前的 `git diff --numstat` 给出的是另一套数——首轮我就把 mock 记成了 331/0） |
-| **代码累计（本次提交后实测，排除本文档）** | **56 files / 15165 insertions(+), 147 deletions(-)**（`git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"`）。⚠️ 上一版预测的「55 files / 15170 / 152」= 旧累计 + 本批 numstat，**实测对不上**（差 1 file / −5(+) / −5(−)），成因是 `git add -A` 对若干历史 LF 文件做了行尾归一化 ⇒ **累加式估算不可信，必须每次跑整段 diff** |
+| 我：P4.1 培训与学分（**后端 + 仓颉单测，本次提交**） | **5 files / 2637 insertions(+), 6 deletions(-)**：新增 `training_controller.cj` 1478/0、`training_controller_test.cj` 1070/0；改动 `main.cj` 23/2、`init.sql` 64/4、`notification_controller.cj` 2/0，逐项见 12.16。⚠️ **半批**：前端视图 / mock / E2E 未做，模块尚未闭环 |
+| **代码累计（P4.1 后端切片暂存后实测，排除本文档）** | **58 files / 17798 insertions(+), 149 deletions(-)**（同一命令复跑）。较 P3.2 收口时的 56 files / 15165(+) / 147(−) 净增 **+2633 行 / 2 个新文件**，与本批 numstat 的 2637(+) 差 4 行——差值来自 `init.sql`/`main.cj` 里改动到基线既有行，**再次印证上一条 P3.2 行的结论：以整段 diff 为准，不做累加估算**（命令：`git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"`） |
 | 含文档累计（`86f7b8f` 提交后实测） | 45 files / 11220 insertions(+), 147 deletions(-) |
 
 三条口径说明：
@@ -1280,11 +1363,12 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 3. 旧版本本节写过「8 files」「38 files / 8082 insertions」「约 29%」，三个数**都是当时口算的**，
    现已全部替换为 `git show --shortstat` 输出（P0 实为 11 files，不是 8）。这正是 11.2 立纪律的直接动因。
 
-⚠️ 诚实结论：按代码插入量 **15165 / 27803 ≈ 54.5%**（P3.2 已完整交付，上一版 48.9%），
-**越过用户要求的「至少匹配现有需求量」这条线，但仍不厚**——
-**需求 23 条里已完整交付 16 条，余 7 条未开工**（P3.2 不再是半条，只剩真实库账号命中路径这一项受 L-NOTIF-3 限制）。
-剩余 P4.1 / P4.2 是主要来源，这两个新模块要同时落
-「建表 + 后端 controller + 仓颉单测 + 前端视图 + 路由注册 + mock + E2E」，是唯一有希望把比值推向 60%+ 的工作包；
+⚠️ 诚实结论：按代码插入量 **17798 / 27803 ≈ 64.0%**（上一版 54.5%，增量来自 P4.1 后端切片的 +2633，见 13.5 表），
+**已越过用户要求的「至少匹配现有需求量」这条线**，但 P4.1 仍是**半批**（前端/E2E 未落），模块尚未按七步闭环验收。
+**需求 23 条里已完整交付 16 条，P4.1 半条已交付**（后端 + 单测完成，前端/E2E 未落；P3.2 只剩真实库账号命中路径一项受 L-NOTIF-3 限制，已在 12.15 ⑤ 兑付）。
+比值已过 60%（上一版预估的「推向 60%+」由本批实现），但**过线不等于闭环**：
+「建表 + 后端 controller + 仓颉单测 + 前端视图 + 路由注册 + mock + E2E」七步里 P4.1 只走了前四步，
+剩下的前端 + E2E 是下一批的确定范围（连同 P4.2 差旅与报销）。
 P5 的 5 份交付文档**不计入**上面的分子（口径 1）。行数仍不是目标，可验证的功能与测试才是 ——
 但用户这句话本身是可量化的，所以我不拿「质量优先」当借口回避它。
 

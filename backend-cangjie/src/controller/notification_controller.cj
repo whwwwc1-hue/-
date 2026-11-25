@@ -29,6 +29,7 @@ public func notifIsValidType(t: String): Bool {
     if (t == "LEAVE_REJECTED") { return true }
     if (t == "LEAVE_NEXT_LEVEL") { return true }
     if (t == "PAYROLL_PAID") { return true }
+    if (t == "TRAINING_PUBLISHED") { return true }
     return false
 }
 
@@ -39,6 +40,7 @@ public func notifTypeLabel(t: String): String {
     if (t == "LEAVE_REJECTED") { return "审批已驳回" }
     if (t == "LEAVE_NEXT_LEVEL") { return "待你复核" }
     if (t == "PAYROLL_PAID") { return "工资条已发放" }
+    if (t == "TRAINING_PUBLISHED") { return "培训新课上线" }
     return "系统通知"
 }
 

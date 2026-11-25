@@ -223,9 +223,30 @@ func dispatchRequest(ctx: HttpContext): Unit {
             if (id > 0 && segs[4] == "hire") { handleCandidateHire(ctx, id); return }
         }
 
+        // Training (P4.1 培训与学分) routes
+        // 顺序纪律：available / my / stats 是固定段，必须排在 /:id 分支之前——
+        // 它们的段数与 /trainings/:id 相同（4 段），一旦让 parseIntId 先跑，
+        // "available" 会解析成 0 并一路掉到 404，排查起来极不直观。
+        if (path == "/api/v1/trainings/available" && method == "GET") { handleTrainingAvailable(ctx); return }
+        if (path == "/api/v1/trainings/my" && method == "GET") { handleTrainingMy(ctx); return }
+        if (path == "/api/v1/trainings/stats" && method == "GET") { handleTrainingStats(ctx); return }
+        if (path == "/api/v1/trainings" && method == "GET") { handleTrainingList(ctx); return }
+        if (path == "/api/v1/trainings" && method == "POST") { handleTrainingCreate(ctx); return }
+        if (segs.size == 4 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "trainings" && method == "PUT") {
+            let id = parseIntId(segs[3])
+            if (id > 0) { handleTrainingUpdate(ctx, id); return }
+        }
+        if (segs.size == 5 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "trainings") {
+            let id = parseIntId(segs[3])
+            if (id > 0 && segs[4] == "records" && method == "GET") { handleTrainingRoster(ctx, id); return }
+            if (id > 0 && segs[4] == "records" && method == "POST") { handleTrainingResult(ctx, id); return }
+            if (id > 0 && segs[4] == "checkin" && method == "POST") { handleTrainingCheckin(ctx, id); return }
+            if (id > 0 && segs[4] == "signup" && method == "POST") { handleTrainingSignup(ctx, id); return }
+            if (id > 0 && segs[4] == "signup" && method == "DELETE") { handleTrainingUnsignup(ctx, id); return }
+        }
+
         // System routes
-        if (path == "/api/v1/system/users" && method == "GET") { handleSystemUsers(ctx); return }
-        if (segs.size == 5 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "system" && segs[3] == "users" && method == "PUT") {
+        if (path == "/api/v1/system/users" && method == "GET") { handleSystemUsers(ctx); return }        if (segs.size == 5 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "system" && segs[3] == "users" && method == "PUT") {
             let id = parseIntId(segs[4])
             if (id > 0) { handleSystemUserUpdate(ctx, id); return }
         }

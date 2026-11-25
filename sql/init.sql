@@ -208,15 +208,15 @@ CREATE TABLE IF NOT EXISTS hr_approval_log (
 ) ENGINE=InnoDB COMMENT='审批链历史表';
 
 -- 13. 站内通知表（P3.2 通知中心）
--- 三类触发：合同 30 天内到期 / 审批结果（含长假转二级）/ 工资条发放。
--- UNIQUE(user_id, type, ref_id) 是幂等的关键：重复发薪、工作台反复刷新都不会堆出第二条。
---   ref_id 取值——PAYROLL_PAID=工资单ID；LEAVE_*=申请单ID；
+-- 四类触发：合同 30 天内到期 / 审批结果（含长假转二级）/ 工资条发放 / 培训计划发布。
+-- UNIQUE(user_id, type, ref_id) 是幂等的关键：重复发薪、工作台反复刷新、同一门课反复发布都不会堆出第二条。
+--   ref_id 取值——PAYROLL_PAID=工资单ID；LEAVE_*=申请单ID；TRAINING_PUBLISHED=培训计划ID；
 --   CONTRACT_EXPIRING=`员工ID:到期日`（续签后到期日变化即可重新提醒）。
 -- user_id 与 sys_user.id 同为 BIGINT；read_flag 用 TINYINT(1) 与全库布尔列风格一致。
 CREATE TABLE IF NOT EXISTS sys_notification (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id BIGINT NOT NULL COMMENT '接收人(sys_user.id)',
-    type VARCHAR(30) NOT NULL COMMENT 'CONTRACT_EXPIRING/LEAVE_APPROVED/LEAVE_REJECTED/LEAVE_NEXT_LEVEL/PAYROLL_PAID',
+    type VARCHAR(30) NOT NULL COMMENT 'CONTRACT_EXPIRING/LEAVE_APPROVED/LEAVE_REJECTED/LEAVE_NEXT_LEVEL/PAYROLL_PAID/TRAINING_PUBLISHED',
     title VARCHAR(120) NOT NULL COMMENT '标题（代码拼装，不含用户输入）',
     content VARCHAR(500) DEFAULT NULL COMMENT '正文（代码拼装，不含用户输入）',
     ref_id VARCHAR(64) NOT NULL DEFAULT '' COMMENT '业务跳转键，见上方注释',
@@ -225,6 +225,52 @@ CREATE TABLE IF NOT EXISTS sys_notification (
     UNIQUE KEY uk_notif_user_type_ref (user_id, type, ref_id),
     INDEX idx_notif_user_read (user_id, read_flag)
 ) ENGINE=InnoDB COMMENT='站内通知表';
+
+-- 14. 培训计划表（P4.1 培训与学分）
+-- 状态机：DRAFT ->(发布) PUBLISHED ->(结课) DONE ；DRAFT/PUBLISHED ->(取消) CANCELLED。
+-- DONE/CANCELLED 为终态，推进与校验全部在 training_controller.trainingStatusTransition 里，
+-- 数据库不设触发器——和 hr_leave_overtime 一样把状态规则留在唯一一处实现，避免两处漂移。
+-- dept_id = 0 表示全员可见；capacity = 0 表示不限名额（培训名额天然有「不限」这一档）。
+CREATE TABLE IF NOT EXISTS hr_training (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    title VARCHAR(120) NOT NULL COMMENT '培训主题',
+    category VARCHAR(20) NOT NULL DEFAULT 'INTERNAL' COMMENT 'INTERNAL内部培训/ONLINE在线课程/EXTERNAL外部课程/COMPLIANCE合规必修',
+    trainer VARCHAR(64) NOT NULL DEFAULT '' COMMENT '讲师/机构',
+    dept_id BIGINT NOT NULL DEFAULT 0 COMMENT '面向部门ID，0=全员',
+    start_time DATETIME NOT NULL COMMENT '开课时间',
+    end_time DATETIME NOT NULL COMMENT '结课时间',
+    capacity INT NOT NULL DEFAULT 0 COMMENT '名额上限，0=不限',
+    credit DECIMAL(4, 1) NOT NULL DEFAULT 1.0 COMMENT '本课程学分',
+    location VARCHAR(120) NOT NULL DEFAULT '' COMMENT '地点或线上链接',
+    description VARCHAR(500) DEFAULT NULL COMMENT '课程简介',
+    status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT/PUBLISHED/DONE/CANCELLED',
+    creator_id BIGINT NOT NULL DEFAULT 0 COMMENT '发布人用户ID(sys_user.id)',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_training_status (status),
+    INDEX idx_training_start (start_time),
+    INDEX idx_training_dept (dept_id)
+) ENGINE=InnoDB COMMENT='培训计划表';
+
+-- 15. 培训报名与学分记录表（P4.1）
+-- 一人一课一行（UNIQUE），报名/签到/考核都写同一行，不额外建签到表：
+-- 三态共用一行才能天然防「重复报名」「重复签到」「重复录分」。
+-- score 为 NULL 表示该课无考核环节或尚未录入；credit 由后端按培训学分与分数算出，前端只读。
+-- status：REGISTERED 已报名 / ATTENDED 已出勤 / ABSENT 缺席 / CANCELLED 已取消报名。
+CREATE TABLE IF NOT EXISTS hr_training_record (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    training_id BIGINT NOT NULL COMMENT '培训计划ID(hr_training.id)',
+    employee_id BIGINT NOT NULL COMMENT '员工ID(hr_employee.id)',
+    status VARCHAR(20) NOT NULL DEFAULT 'REGISTERED' COMMENT 'REGISTERED/ATTENDED/ABSENT/CANCELLED',
+    checkin_at DATETIME DEFAULT NULL COMMENT '签到时间',
+    score DECIMAL(5, 1) DEFAULT NULL COMMENT '考核得分（0-100），NULL=未考核/未录入',
+    credit DECIMAL(4, 1) NOT NULL DEFAULT 0.0 COMMENT '实际获得学分',
+    remark VARCHAR(255) DEFAULT NULL COMMENT 'HR 备注（缺席原因等）',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tr_training_emp (training_id, employee_id),
+    INDEX idx_tr_emp_status (employee_id, status)
+) ENGINE=InnoDB COMMENT='培训报名与学分记录表';
 
 -- ==========================================
 -- 初始演示数据（Seed Data）
@@ -252,3 +298,17 @@ INSERT IGNORE INTO hr_employee (id, emp_no, name, gender, phone, email, dept_id,
 INSERT IGNORE INTO hr_recruitment_candidate (id, name, gender, phone, email, target_dept_id, target_position, expected_salary, source, stage, interview_notes) VALUES
 (1, '周星辰', 1, '13911112222', 'zhou@example.com', 2, '仓颉后端工程师', 20000.00, 'BOSS直聘', 'OFFER', '技术面表现优秀，熟悉仓颉并发模型'),
 (2, '吴雨桐', 2, '13933334444', 'wu@example.com', 4, '高级产品经理', 18000.00, '猎聘', 'INTERVIEW', '已完成一面，待复试');
+
+-- 培训计划种子数据：开课时间用 NOW() 相对量表达，保证任何时候重建库都能演示
+-- 「可报名 / 签到窗口内 / 已结课」三种状态，而不是依赖某一次固定的日历快照。
+INSERT IGNORE INTO hr_training (id, title, category, trainer, dept_id, start_time, end_time, capacity, credit, location, description, status, creator_id) VALUES
+(1, '仓颉语言工程实践：从并发到数据访问层', 'INTERNAL', '李泽宇', 2, NOW() + INTERVAL 3 DAY, NOW() + INTERVAL 3 DAY + INTERVAL 5 HOUR, 30, 2.0, '总部 3F 路演厅', '面向研发的仓颉实操课，覆盖协程、并发模型与 MySQL 数据访问层加固。', 'PUBLISHED', 2),
+(2, '信息安全与合规必修（年度）', 'COMPLIANCE', '外部讲师 · 安永', 0, NOW() + INTERVAL 7 DAY, NOW() + INTERVAL 7 DAY + INTERVAL 2 HOUR, 0, 1.0, '线上直播', '全员必修，未获得学分将影响年度绩效评级。', 'PUBLISHED', 2),
+(3, '高效绩效面谈技巧', 'ONLINE', '王静', 3, NOW() - INTERVAL 10 DAY, NOW() - INTERVAL 10 DAY + INTERVAL 2 HOUR, 20, 1.5, '飞书会议室', '面向 HRBP 与部门主管的面谈方法论，含录像回放。', 'DONE', 2),
+(4, '新员工入职引导（草稿）', 'INTERNAL', '王静', 0, NOW() + INTERVAL 15 DAY, NOW() + INTERVAL 15 DAY + INTERVAL 3 HOUR, 50, 1.0, '总部 2F 培训室', '草稿状态，尚未发布，员工端不可见。', 'DRAFT', 2);
+
+-- 第 3 课（已结课）的成绩与学分：88 分全额学分、55 分不合格零学分。
+INSERT IGNORE INTO hr_training_record (id, training_id, employee_id, status, checkin_at, score, credit, remark) VALUES
+(1, 3, 2, 'ATTENDED', NOW() - INTERVAL 10 DAY, 88.0, 1.5, NULL),
+(2, 3, 4, 'ATTENDED', NOW() - INTERVAL 10 DAY, 55.0, 0.0, '补考安排在下季度'),
+(3, 3, 5, 'ABSENT', NULL, NULL, 0.0, '入职当周未参加');
