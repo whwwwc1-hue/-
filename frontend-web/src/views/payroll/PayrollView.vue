@@ -279,10 +279,20 @@ import {
   updatePayrollApi
 } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
+import { useRoute } from 'vue-router'
 
 const auth = useAuthStore()
+const route = useRoute()
 const isHrOrAdmin = computed(() => auth.hasRole(['ADMIN', 'HR']))
-const activeTab = ref(isHrOrAdmin.value ? 'admin' : 'my')
+// 通知中心的「工资条已发放」会跳 /payroll?tab=my，这里必须认这个参数，
+// 否则 HR/ADMIN 点通知只会落在薪资核算中心，看不到自己的那一条。
+const activeTab = ref(route.query.tab === 'my' ? 'my' : isHrOrAdmin.value ? 'admin' : 'my')
+watch(
+  () => route.query.tab,
+  (tab) => {
+    if (tab === 'my') activeTab.value = 'my'
+  }
+)
 
 const loading = ref(false)
 const myLoading = ref(false)

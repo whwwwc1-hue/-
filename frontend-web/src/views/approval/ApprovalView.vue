@@ -222,7 +222,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   approveRequestApi,
@@ -232,11 +232,21 @@ import {
   getRequestListApi
 } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
+import { useRoute } from 'vue-router'
 
 const auth = useAuthStore()
+const route = useRoute()
 const canApprove = computed(() => auth.hasRole(['ADMIN', 'HR', 'MANAGER']))
 
-const activeTab = ref('my')
+// 通知中心「待你复核」跳 /approval?tab=approve；员工没有审批工作台，
+// 因此只在 canApprove 时才认这个参数，避免切到一个不存在的 tab 名。
+const activeTab = ref(canApprove.value && route.query.tab === 'approve' ? 'approve' : 'my')
+watch(
+  () => [route.query.tab, canApprove.value] as const,
+  ([tab, allowed]) => {
+    if (allowed && tab === 'approve') activeTab.value = 'approve'
+  }
+)
 const myLoading = ref(false)
 const myList = ref<any[]>([])
 

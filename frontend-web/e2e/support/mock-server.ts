@@ -12,6 +12,7 @@
  *   - controller/payroll_controller.cj     → 算薪公式（5000 起征、18.5% 社保、21.75 日薪、1.5 倍加班）
  *   - controller/dashboard_controller.cj   → overview 的 kpis/图表/到期合同结构
  *   - controller/employee_controller.cj    → 员工列表 20 字段、CSV 解析与批量导入校验
+ *   - controller/notification_controller.cj → 站内通知 4 个只读/标读接口 + 3 个落库触发点
  *   - middleware/auth 守卫                  → 401/403 的状态码与文案
  *
  * ## 已知并有意保留的偏差（不要当 bug 修）
@@ -24,6 +25,10 @@
  * ## 防假绿
  * 任何落入 if 链之外、没人认领的 /api/v1 请求都会记进 unmatched，
  * fixtures 在每个用例结束时断言 unmatched 为空，避免接口写错却悄悄通过。
+ *
+ * 分发顺序不是风格问题：`/attendance/today` 必须排在 `/attendance/{id}` 之前，
+ * `/notifications/unread-count` 与 `/notifications/read-all` 必须排在
+ * `/notifications/{id}/read` 之前，否则精确路径会被正则分支吞成 id=NaN。
  */
 import type { BrowserContext, Route } from '@playwright/test'
 import type { UserProfile } from '../../src/api/hrms'
@@ -272,6 +277,34 @@ export interface PayRow {
   remark: string
 }
 
+/**
+ * 站内通知行（P3.2），字段一一对应 sql/init.sql 的 sys_notification：
+ * (id, user_id, type, title, content, ref_id, read_flag, created_at)。
+ * 后端 GET /api/notifications 返回的是 notifRowToJson 的结果——把 user_id / read_flag
+ * 换成 typeLabel / isRead，所以这里也分两套：NotifRow 是存储态，出参见 notifToJson。
+ */
+export interface NotifRow {
+  id: number
+  userId: number
+  type: string
+  title: string
+  content: string
+  refId: string
+  readFlag: number
+  createdAt: string
+}
+
+/** notification_controller.cj NOTIF_TYPE_LABELS 的 TS 镜像。 */
+const NOTIF_TYPE_LABELS: Record<string, string> = {
+  CONTRACT_EXPIRING: '合同到期提醒',
+  LEAVE_APPROVED: '审批已通过',
+  LEAVE_REJECTED: '审批已驳回',
+  LEAVE_NEXT_LEVEL: '待你复核',
+  PAYROLL_PAID: '工资条已发放'
+}
+/** NOTIF_VALID_TYPES：后端 pushNotification 对表外 type 直接丢弃、不报错。 */
+const NOTIF_VALID_TYPES = ['CONTRACT_EXPIRING', 'LEAVE_APPROVED', 'LEAVE_REJECTED', 'LEAVE_NEXT_LEVEL', 'PAYROLL_PAID']
+
 interface PerfRow {
   id: number
   employeeId: number
@@ -357,6 +390,8 @@ export class MockBackend {
   /** P3.1 审批链历史，对应 hr_approval_log；UNIQUE(request_id, step) 由 pushApprovalLog 兜住。 */
   private readonly approvalLogs: ApprovalLogRow[] = []
   private readonly payrolls: PayRow[] = []
+  /** P3.2 站内通知；真实库有 UNIQUE(user_id, type, ref_id)，这里用 notifPush 的查重兜住。 */
+  private readonly notifications: NotifRow[] = []
   private readonly performances: PerfRow[] = []
   /** 部门 / 岗位种子逐行取自 sql/init.sql 的 hr_department、hr_position（在职人数不写死，由 employees 现算）。 */
   private readonly departments: DeptSeed[] = [
@@ -559,6 +594,180 @@ export class MockBackend {
     this.failures.clear()
     this.unmatched.length = 0
     this.renewToken = null
+    this.notifications.length = 0
+  }
+
+  /* ------------------------------------------------------ P3.2 站内通知 */
+
+  /** 该账号的未读数（GET /notifications/unread-count 的同一口径：read_flag = 0）。 */
+  notifUnread(username: DemoAccount): number {
+    const userId = this.account(username).userId
+    return this.notifications.filter((n) => n.userId === userId && n.readFlag === 0).length
+  }
+
+  /** 该账号收到的通知（存储态），供用例断言条数与去重键。 */
+  notifList(username: DemoAccount): NotifRow[] {
+    const userId = this.account(username).userId
+    return this.notifications.filter((n) => n.userId === userId)
+  }
+
+  /** 某类型通知的条数，用来钉住去重（UNIQUE(user_id, type, ref_id)）。 */
+  notifCountByType(username: DemoAccount, type: string): number {
+    return this.notifList(username).filter((n) => n.type === type).length
+  }
+
+  /** 某类型通知的去重键集合，直接看 ref_id 就能确认「同一业务对象只发了一条」。 */
+  notifRefIds(username: DemoAccount, type: string): string[] {
+    return this.notifList(username)
+      .filter((n) => n.type === type)
+      .map((n) => n.refId)
+  }
+
+  /**
+   * 对应后端 notifResolveUser：按 employee_id 找 user_id，
+   * 没有账号的员工（真实库里确实存在）返回 0，调用方直接跳过——通知是尽力而为的旁路。
+   */
+  private notifUserIdByEmp(employeeId: number): number {
+    const hit = this.accounts.find((a) => a.employeeId === employeeId && a.isActive)
+    return hit ? hit.userId : 0
+  }
+
+  /**
+   * 对应后端 notifHrUserSql：HR + ADMIN，且按 id 升序。
+   * 注意 PENDING_HR 的 LEAVE_NEXT_LEVEL 收件人就是这批人（notifManagerUserSql 是
+   * leave_controller 的路由逻辑，与通知无关），这里不复制一份主管查询避免两处漂移。
+   */
+  private notifHrUserIds(): number[] {
+    return this.accounts
+      .filter((a) => (a.role === 'HR' || a.role === 'ADMIN') && a.isActive)
+      .map((a) => a.userId)
+      .sort((x, y) => x - y)
+  }
+
+  /**
+   * 对应后端 pushNotification：非法 type 直接丢；(userId, type, refId) 已存在也直接丢。
+   * 后端靠 UNIQUE KEY + INSERT IGNORE 去重，mock 靠这里显式查重，语义一致。
+   */
+  private notifPush(userId: number, type: string, title: string, content: string, refId: string): boolean {
+    if (!NOTIF_VALID_TYPES.includes(type)) return false
+    if (userId <= 0) return false
+    if (this.notifications.some((n) => n.userId === userId && n.type === type && n.refId === refId)) return false
+    this.notifications.push({
+      id: this.seq++,
+      userId,
+      type,
+      title,
+      content,
+      refId,
+      readFlag: 0,
+      createdAt: nowStamp()
+    })
+    return true
+  }
+
+  /** 对应后端 notifTypeLabel：表外值回落「系统通知」，绝不给空串。 */
+  private notifTypeLabel(type: string): string {
+    return NOTIF_TYPE_LABELS[type] ?? '系统通知'
+  }
+
+  /** 对应后端 notifRowToJson 的出参字段（typeLabel / isRead 由后端算好）。 */
+  private notifToJson(n: NotifRow): Json {
+    return {
+      id: n.id,
+      type: n.type,
+      typeLabel: this.notifTypeLabel(n.type),
+      title: n.title,
+      content: n.content,
+      refId: n.refId,
+      isRead: n.readFlag === 1,
+      createdAt: n.createdAt
+    }
+  }
+
+  /** 该账号可见的通知（后端一律按 user_id 收口，这里同样不提供跨用户读取的口子）。 */
+  private notifOwned(userId: number): NotifRow[] {
+    return this.notifications
+      .filter((n) => n.userId === userId)
+      .sort((a, b) => (a.createdAt === b.createdAt ? b.id - a.id : a.createdAt < b.createdAt ? 1 : -1))
+  }
+
+  /**
+   * 对应后端 notifyApprovalFinal：终态时给申请人发 LEAVE_APPROVED/REJECTED；
+   * PENDING_MGR→PENDING_HR 这一步额外给每个 HR/ADMIN 发 LEAVE_NEXT_LEVEL。
+   * ref_id 一律用审批单 id——重复审批终态时会被 UNIQUE 吃掉。
+   */
+  private notifyApprovalFinal(row: ReqRow, next: string): void {
+    const emp = this.employee(row.employeeId)
+    const userId = this.notifUserIdByEmp(row.employeeId)
+    if (next === 'APPROVED' || next === 'REJECTED') {
+      if (userId > 0) {
+        this.notifPush(
+          userId,
+          next === 'APPROVED' ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
+          next === 'APPROVED' ? '请假申请已通过' : '请假申请被驳回',
+          next === 'APPROVED'
+            ? `${emp.name} 的${this.notifCategoryLabel(row.category)}申请（${this.notifDurationText(row.category, row.duration)}）已通过审批。`
+            : `${emp.name} 的${this.notifCategoryLabel(row.category)}申请未通过，请查看审批意见。`,
+          String(row.id)
+        )
+      }
+    }
+    if (next === 'PENDING_HR') {
+      for (const uid of this.notifHrUserIds()) {
+        this.notifPush(
+          uid,
+          'LEAVE_NEXT_LEVEL',
+          '有长假待你复核',
+          `${emp.name} 的请假申请已超过 3 天，部门主管已通过一级，请复核。`,
+          String(row.id)
+        )
+      }
+    }
+  }
+
+  /** 对应后端 notifCategoryLabel（只认 LEAVE / OVERTIME，其它一律「假勤」）。 */
+  private notifCategoryLabel(category: string): string {
+    if (category === 'LEAVE') return '请假'
+    if (category === 'OVERTIME') return '加班'
+    return '假勤'
+  }
+
+  /** 对应后端 notifDurationText：加班按小时、其余按天，都保留两位。 */
+  private notifDurationText(category: string, duration: number): string {
+    const value = duration.toFixed(2)
+    return category === 'OVERTIME' ? `${value} 小时` : `${value} 天`
+  }
+
+  /** 对应后端 notifyPayrollPaid：ref_id = 工资单 id，同一月重复发薪不会产生第二条。 */
+  private notifyPayrollPaid(employeeId: number, payrollId: number, payMonth: string): void {
+    const userId = this.notifUserIdByEmp(employeeId)
+    if (userId <= 0) return
+    this.notifPush(
+      userId,
+      'PAYROLL_PAID',
+      `${payMonth} 工资条已发放`,
+      `${payMonth} 的工资已发放，点击查看详情。`,
+      String(payrollId)
+    )
+  }
+
+  /**
+   * 对应后端 notifyContractExpiringBatch：给每个 HR/ADMIN 各推一条。
+   * ref_id = `员工id:到期日`，所以刷新多少次工作台都只会有一条同内容的通知——
+   * 这正是 e2e 里「重复触发不产生第二条」那条用例要钉的行为。
+   */
+  private notifyContractExpiringBatch(
+    items: Array<{ empNo: string; name: string; contractEndDate: string; daysLeft: number }>
+  ): void {
+    const userIds = this.notifHrUserIds()
+    if (userIds.length === 0) return
+    for (const item of items) {
+      const emp = this.employees.find((e) => e.empNo === item.empNo)
+      if (!emp) continue
+      const title = '合同即将到期'
+      const content = `${item.name} 的劳动合同将于 ${item.contractEndDate} 到期（剩余 ${item.daysLeft} 天），请及时办理续签。`
+      for (const uid of userIds) this.notifPush(uid, 'CONTRACT_EXPIRING', title, content, `${emp.id}:${item.contractEndDate}`)
+    }
   }
 
   /* ------------------------------------------------------------ 挂载与分发 */
@@ -748,7 +957,7 @@ export class MockBackend {
     if (method === 'PUT' && path === '/auth/password') return this.needAuth(call, () => this.onPassword(call))
 
     /* ---------- 工作台 ---------- */
-    if (method === 'GET' && path === '/dashboard/overview') return this.needAuth(call, () => this.onOverview())
+    if (method === 'GET' && path === '/dashboard/overview') return this.needAuth(call, () => this.onOverview(call))
 
     /* ---------- 考勤 ---------- */
     if (method === 'GET' && path === '/attendance/today') return this.needAuth(call, () => this.onToday(call))
@@ -774,6 +983,14 @@ export class MockBackend {
     if (method === 'GET' && path === '/payrolls') return this.needRoles(call, ['ADMIN', 'HR'], () => this.onPayrollList(call))
     if (method === 'POST' && (m = path.match(/^\/payrolls\/(\d+)\/pay$/))) return this.needRoles(call, ['ADMIN', 'HR'], () => this.onPaySingle(call, Number((m as RegExpMatchArray)[1])))
     if (method === 'PUT' && (m = path.match(/^\/payrolls\/(\d+)$/))) return this.needRoles(call, ['ADMIN', 'HR'], () => this.onPayrollUpdate(call, Number((m as RegExpMatchArray)[1])))
+
+    /* ---------- 站内通知（P3.2，契约见 notification_controller.cj） ---------- */
+    // 固定路径必须排在 /notifications/{id}/read 正则之前：
+    // 若把 `unread-count` 放进正则分支，GET /notifications/unread-count 会被当成 id=NaN 的读取。
+    if (method === 'GET' && path === '/notifications/unread-count') return this.needAuth(call, () => this.onNotifUnread(call))
+    if (method === 'POST' && path === '/notifications/read-all') return this.needAuth(call, () => this.onNotifReadAll(call))
+    if (method === 'GET' && path === '/notifications') return this.needAuth(call, () => this.onNotifList(call))
+    if (method === 'PUT' && (m = path.match(/^\/notifications\/(\d+)\/read$/))) return this.needAuth(call, () => this.onNotifRead(call, Number((m as RegExpMatchArray)[1])))
 
     /* ---------- 组织架构与系统管理（rbac-menu 用例触达，契约见 org_controller / system_controller） ---------- */
     if (method === 'GET' && path === '/departments/tree') return this.needAuth(call, () => this.onDeptTree())
@@ -1138,13 +1355,17 @@ export class MockBackend {
 
   /* -------------------------------------------------------------- 工作台 */
 
-  private onOverview(): Reply {
+  private onOverview(call: Call): Reply {
     const today = localDate()
     const clockedIn = this.attendance.filter((r) => r.workDate === today && r.clockInTime).length
     const active = this.employees.filter((e) => e.empStatus !== 'RESIGNED')
     const expiring = [
       { empNo: 'EMP20260004', name: '陈思远', deptName: '技术研发中心', positionName: '仓颉后端工程师', contractEndDate: '2026-12-15', daysLeft: 22 }
     ]
+    // 后端 dashboard 的旁路触发：只有 HR/ADMIN 打开工作台才会产生合同到期提醒，
+    // 去重键是 `员工id:到期日`，因此反复刷新工作台不会堆出重复通知。
+    const overviewRole = (call.account as Account).role
+    if (overviewRole === 'ADMIN' || overviewRole === 'HR') this.notifyContractExpiringBatch(expiring)
     const deptMap = new Map<string, number>()
     const statusMap = new Map<string, number>()
     for (const e of active) {
@@ -1526,6 +1747,9 @@ export class MockBackend {
       remark,
       createdAt: nowStamp()
     })
+    // 与后端同一条链路：终态给申请人发通知，升到二级给 HR/ADMIN 发待复核。
+    // 放在返回之前，保证用例随后读 unread 时状态已一致。
+    this.notifyApprovalFinal(row, next)
     return ok({
       id: row.id,
       status: next,
@@ -1642,6 +1866,7 @@ export class MockBackend {
     if (row.status === 'PAID') return err(400, '该工资单已发放')
     row.status = 'PAID'
     row.paidAt = nowStamp()
+    this.notifyPayrollPaid(row.employeeId, row.id, row.payMonth)
     return ok(null)
   }
 
@@ -1652,6 +1877,9 @@ export class MockBackend {
     for (const p of drafts) {
       p.status = 'PAID'
       p.paidAt = nowStamp()
+      // 后端这里走的是「先查已存在的 ref_id 集合、再拼一条多值 INSERT」的批量旁路；
+      // mock 逐条走同一个去重键 (userId, PAYROLL_PAID, payrollId)，重复发薪同样不产生第二条。
+      this.notifyPayrollPaid(p.employeeId, p.id, p.payMonth)
     }
     return ok({ paidCount: drafts.length })
   }
@@ -1662,6 +1890,63 @@ export class MockBackend {
       .filter((p) => p.employeeId === empId && p.status === 'PAID')
       .sort((a, b) => (a.payMonth === b.payMonth ? b.id - a.id : a.payMonth < b.payMonth ? 1 : -1))
     return ok(rows.map((r) => this.toPayrollJson(r)))
+  }
+
+  /* ------------------------------------------------------ 站内通知（P3.2） */
+
+  /**
+   * 对应 handleNotificationList：readFlag 只认 '0'/'1'（后端 notifReadCond），
+   * limit 走 notifClampLimit（<=0 → 20，>50 → 50），
+   * 响应在 list 之外还带 unread / total，铃铛点开后不用再发一次计数请求。
+   */
+  private onNotifList(call: Call): Reply {
+    const userId = (call.account as Account).userId
+    const rawFlag = call.query.get('readFlag') ?? ''
+    const flag = rawFlag === '0' || rawFlag === '1' ? rawFlag : ''
+    let limit = Number(call.query.get('limit') ?? 20)
+    if (!Number.isFinite(limit) || limit <= 0) limit = 20
+    if (limit > 50) limit = 50
+    const owned = this.notifOwned(userId)
+    const filtered = flag === '' ? owned : owned.filter((n) => String(n.readFlag) === flag)
+    return ok({
+      list: filtered.slice(0, limit).map((n) => this.notifToJson(n)),
+      unread: owned.filter((n) => n.readFlag === 0).length,
+      total: owned.length
+    })
+  }
+
+  private onNotifUnread(call: Call): Reply {
+    const userId = (call.account as Account).userId
+    return ok({ unread: this.notifications.filter((n) => n.userId === userId && n.readFlag === 0).length })
+  }
+
+  /**
+   * 对应 handleNotificationRead 的三种结局：
+   * 不存在或不属于当前用户 → 404「通知不存在或无权限」；
+   * 已是已读 → changed:0 + msg（仍 200，前端重复点击不该报错）；
+   * 正常 → changed:1 + 剩余未读数。
+   */
+  private onNotifRead(call: Call, id: number): Reply {
+    const userId = (call.account as Account).userId
+    const row = this.notifications.find((n) => n.id === id)
+    if (!row || row.userId !== userId) return err(404, '通知不存在或无权限')
+    if (row.readFlag === 1) {
+      return ok({ id, changed: 0, unread: this.notifications.filter((n) => n.userId === userId && n.readFlag === 0).length, msg: '通知已是已读状态' })
+    }
+    row.readFlag = 1
+    return ok({ id, changed: 1, unread: this.notifications.filter((n) => n.userId === userId && n.readFlag === 0).length })
+  }
+
+  private onNotifReadAll(call: Call): Reply {
+    const userId = (call.account as Account).userId
+    let changed = 0
+    for (const n of this.notifications) {
+      if (n.userId === userId && n.readFlag === 0) {
+        n.readFlag = 1
+        changed += 1
+      }
+    }
+    return ok({ changed, unread: 0 })
   }
 
   /* ------------------------------------------------------ 组织架构（只读） */

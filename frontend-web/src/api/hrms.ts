@@ -159,3 +159,30 @@ export const hireCandidateApi = (id: number, data: any) => request.post<unknown,
 export const getSystemUsersApi = () => request.get<unknown, any[]>('/system/users')
 export const updateSystemUserApi = (id: number, data: any) => request.put<unknown, null>(`/system/users/${id}`, data)
 export const getAuditLogsApi = (params: any) => request.get<unknown, PageResult<any>>('/system/audit-logs', { params })
+
+// ==================== P3.2 站内通知中心 ====================
+// 后端把 typeLabel 一起下发（见 notification_controller.notifRowToJson），
+// 前端不再维护第二份映射表，避免「加了新 type 忘记改前端」这类漂移。
+export interface NotificationItem {
+  id: number
+  type: string
+  typeLabel: string
+  title: string
+  content: string
+  refId: string
+  isRead: boolean
+  createdAt: string
+}
+
+export interface NotificationListResult {
+  list: NotificationItem[]
+  unread: number
+  total: number
+}
+
+export const getNotificationsApi = (params?: { readFlag?: string; limit?: number }) =>
+  request.get<unknown, NotificationListResult>('/notifications', { params })
+export const getUnreadCountApi = () => request.get<unknown, { unread: number }>('/notifications/unread-count')
+export const readNotificationApi = (id: number) =>
+  request.put<unknown, { id: number; changed: number; unread?: number }>(`/notifications/${id}/read`, {})
+export const readAllNotificationsApi = () => request.post<unknown, { changed: number; unread: number }>('/notifications/read-all', {})

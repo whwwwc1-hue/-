@@ -60,6 +60,11 @@
         </div>
 
         <div class="flex items-center gap-4">
+          <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="99" data-testid="notif-badge">
+            <el-button text circle data-testid="notif-bell" title="站内通知" @click="openNotificationDrawer">
+              <el-icon :size="18"><Bell /></el-icon>
+            </el-button>
+          </el-badge>
           <el-tag :type="roleTagType" effect="light" round>
             {{ roleLabel }}
           </el-tag>
@@ -108,15 +113,76 @@
         <el-button type="primary" :loading="pwdLoading" @click="submitPassword">确认修改</el-button>
       </template>
     </el-dialog>
+
+    <!--
+      P3.2 站内通知抽屉。
+      刻意关掉组件自带的 header：el-drawer 的标题行渲染成语义 <header>，
+      而布局自身的顶栏也是一个 <header>，两者并存会让所有按 `locator('header')`
+      取顶栏的用例撞上 strict mode（rbac-menu / auth 都有）。
+      标题改由正文首行自绘，视觉与可访问名（aria-label 仍取 title）都不丢。
+    -->
+    <el-drawer v-model="notifVisible" title="站内通知" size="420px" :with-header="false">
+      <div data-testid="notif-drawer">
+        <div class="mb-3 flex items-center justify-between">
+          <span class="text-base font-semibold text-slate-800">站内通知</span>
+          <el-button link size="small" data-testid="notif-close" @click="notifVisible = false">关闭</el-button>
+        </div>
+
+        <div class="mb-3 flex items-center justify-between">
+          <el-radio-group v-model="notifFilter" size="small" data-testid="notif-filter" @change="loadNotifications">
+            <el-radio-button value="all">全部</el-radio-button>
+            <el-radio-button value="0">未读</el-radio-button>
+          </el-radio-group>
+          <el-button link type="primary" size="small" data-testid="notif-read-all" @click="markAllRead">
+            全部已读
+          </el-button>
+        </div>
+
+        <div v-if="unreadCount > 0" class="mb-2 text-xs text-slate-400" data-testid="notif-unread-text">
+          你有 {{ unreadCount }} 条未读通知
+        </div>
+
+        <div v-loading="notifLoading" class="space-y-2">
+          <div
+            v-for="n in notifications"
+            :key="n.id"
+            data-testid="notif-item"
+            class="cursor-pointer rounded-lg border px-3 py-2.5 transition-colors hover:bg-slate-50"
+            :class="n.isRead ? 'border-slate-200 bg-white' : 'border-blue-200 bg-blue-50/70'"
+            @click="openNotification(n)"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span
+                data-testid="notif-type"
+                class="rounded px-1.5 py-0.5 text-[11px] font-medium"
+                :class="n.isRead ? 'bg-slate-100 text-slate-500' : 'bg-blue-100 text-blue-700'"
+              >{{ n.typeLabel }}</span>
+              <span class="shrink-0 text-[11px] text-slate-400">{{ n.createdAt.slice(5, 16) }}</span>
+            </div>
+            <div class="mt-1.5 text-sm font-medium text-slate-800" data-testid="notif-title">{{ n.title }}</div>
+            <div v-if="n.content" class="mt-0.5 text-xs leading-relaxed text-slate-500">{{ n.content }}</div>
+          </div>
+
+          <el-empty v-if="!notifLoading && notifications.length === 0" description="暂无通知" :image-size="80" />
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { updatePasswordApi } from '@/api/hrms'
+import {
+  getNotificationsApi,
+  getUnreadCountApi,
+  readAllNotificationsApi,
+  readNotificationApi,
+  updatePasswordApi,
+  type NotificationItem
+} from '@/api/hrms'
 
 const route = useRoute()
 const router = useRouter()
@@ -189,4 +255,83 @@ async function submitPassword() {
     pwdLoading.value = false
   }
 }
+
+// ==================== P3.2 站内通知中心 ====================
+const notifVisible = ref(false)
+const notifLoading = ref(false)
+const notifFilter = ref<'all' | '0'>('all')
+const notifications = ref<NotificationItem[]>([])
+const unreadCount = ref(0)
+const NOTIF_POLL_MS = 30000
+let notifTimer: ReturnType<typeof setInterval> | null = null
+
+// 后端 5 种 type 各自的落地页；未知 type 不跳转，只标已读，
+// 这样以后端新增 type 时前端不会因为映射表缺项而报错。
+const notifRoutes: Record<string, { path: string; query?: Record<string, string> }> = {
+  PAYROLL_PAID: { path: '/payroll', query: { tab: 'my' } },
+  LEAVE_NEXT_LEVEL: { path: '/approval', query: { tab: 'approve' } },
+  LEAVE_APPROVED: { path: '/approval' },
+  LEAVE_REJECTED: { path: '/approval' },
+  CONTRACT_EXPIRING: { path: '/employee' }
+}
+
+async function refreshUnreadCount() {
+  try {
+    const data = await getUnreadCountApi()
+    unreadCount.value = data?.unread ?? 0
+  } catch {
+    // 轮询失败保持上一次的计数：网络抖动不该把红点抹掉
+  }
+}
+
+async function loadNotifications() {
+  notifLoading.value = true
+  try {
+    const data = await getNotificationsApi({
+      readFlag: notifFilter.value === '0' ? '0' : '',
+      limit: 20
+    })
+    notifications.value = data?.list ?? []
+    if (typeof data?.unread === 'number') unreadCount.value = data.unread
+  } finally {
+    notifLoading.value = false
+  }
+}
+
+function openNotificationDrawer() {
+  notifVisible.value = true
+  loadNotifications()
+}
+
+async function openNotification(item: NotificationItem) {
+  if (!item.isRead) {
+    const res = await readNotificationApi(item.id)
+    item.isRead = true
+    if (typeof res?.unread === 'number') unreadCount.value = res.unread
+    else unreadCount.value = Math.max(0, unreadCount.value - 1)
+  }
+  const target = notifRoutes[item.type]
+  notifVisible.value = false
+  if (target && target.path !== route.path) router.push(target)
+}
+
+async function markAllRead() {
+  const res = await readAllNotificationsApi()
+  const changed = res?.changed ?? 0
+  unreadCount.value = res?.unread ?? 0
+  ElMessage.success(changed > 0 ? `已标记 ${changed} 条通知为已读` : '没有未读通知')
+  loadNotifications()
+}
+
+onMounted(() => {
+  refreshUnreadCount()
+  notifTimer = setInterval(refreshUnreadCount, NOTIF_POLL_MS)
+})
+
+onBeforeUnmount(() => {
+  if (notifTimer !== null) {
+    clearInterval(notifTimer)
+    notifTimer = null
+  }
+})
 </script>

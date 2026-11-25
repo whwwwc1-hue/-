@@ -31,9 +31,13 @@ const ROLE_TAG: Record<DemoAccount, string> = {
  * 2. router.beforeEach 的冷启动画像同步 GET /auth/me：page.goto 是整页加载，
  *    守卫必须先用服务端画像覆盖 localStorage 快照（否则角色与年假余额会过期，
  *    见 FOLLOWUP_PLAN L-FE-5），这条发生在目标组件挂载之前，同样不算越权取数。
+ * 3. 顶栏铃铛的未读轮询 GET /notifications/unread-count：它挂在布局上而非路由组件上，
+ *    任何页面都会发，与「越权模块偷跑数据」无关。
+ *    刻意只放行 unread-count——抽屉列表 GET /notifications 必须用户主动点开才会发，
+ *    真出现在这里就说明有组件绕过了交互。
  */
 function trackProtectedApi(page: Page): string[] {
-  const allowed = ['/api/v1/dashboard/', '/api/v1/attendance/today', '/api/v1/auth/me']
+  const allowed = ['/api/v1/dashboard/', '/api/v1/attendance/today', '/api/v1/auth/me', '/api/v1/notifications/unread-count']
   const calls: string[] = []
   page.on('request', (req) => {
     const path = new URL(req.url()).pathname

@@ -85,8 +85,10 @@ test.describe('薪酬入口的权限门', () => {
     await expect(page.locator('#pane-my')).toBeHidden()
     await expect(page.getByRole('button', { name: '一键全部发放' })).toBeVisible()
     // 「我的工资条」pane 对 HR 没有 v-if，只是非激活 tab，预取 /payrolls/my 属设计如此；
-    // 真正要钉住的是：薪酬页绝不替别的模块取数。
-    expect(calls.filter((p) => !p.startsWith('/api/v1/payrolls'))).toEqual([])
+    // 顶栏铃铛的未读轮询属于全局布局，也不是薪酬页发的；
+    // 真正要钉住的是：薪酬页绝不替别的业务模块取数。
+    const layoutOwn = ['/api/v1/payrolls', '/api/v1/notifications/unread-count']
+    expect(calls.filter((p) => !layoutOwn.some((x) => p.startsWith(x)))).toEqual([])
     expect(calls).toContain('/api/v1/payrolls')
   })
 })

@@ -115,7 +115,7 @@
 - [x] **P1.2 接口级集成测试脚本**：`scripts/api-smoke.ps1` 覆盖 4 角色登录、越权 `403`、打卡、审批扣年假、生成工资、工资条金额核对，作为无 CI 时的手工回归。✅ **已完成并经桩验证**：8 个章节 / **112 个断言点**，对「正确后端」桩跑出 `112 通过 / 0 失败 / 0 跳过`（exit 0）；对 5 类人为注入的错误**全部变红**（exit 1）；服务未启动时 exit 2 并给出可操作提示。详见第九节与 `scripts/api-smoke.ps1` 文件头说明。
 - [x] **P1.3 前端 Playwright E2E**：4 角色登录与侧边栏菜单隔离、审批弹窗提交、薪资生成后「我的工资条」金额一致。
       ✅ **已完成并经真实浏览器验证**：5 个 spec（auth 10 / rbac-menu 9 / attendance 8 / payroll 8 / approval 7）= **42 用例**，`--workers=1` 下 **42 passed (1.1m)**；`typecheck` / `eslint --max-warnings 0` / `build` 三连 exit 0。
-      拦截层是**有状态内存 mock**（`route()` 分发表 **28 条**，P1.3 收口时 25 条，P2.2 补 `/employees` + `/employees/import` 两条，P2.4 补 `/attendance/monthly-summary` 一条；逐字段回 `backend-cangjie/src` 源码取契约），fixture teardown 断言 `unmatched == []` —— 前端发起但 mock 未实现的请求会直接让用例失败，这是防「测试通过但契约已漂移」的闸门。
+      拦截层是**有状态内存 mock**（`route()` 分发表 **32 条**，P1.3 收口时 25 条，P2.2 补 `/employees` + `/employees/import` 两条，P2.4 补 `/attendance/monthly-summary` 一条，P3.2 补 `/notifications` 系列 4 条；逐字段回 `backend-cangjie/src` 源码取契约），fixture teardown 断言 `unmatched == []` —— 前端发起但 mock 未实现的请求会直接让用例失败，这是防「测试通过但契约已漂移」的闸门。
       ⚠️ **订正**：本节原写「29 个接口」是**未经测量的口算数**。实测口径应为 `mock-server.ts` 里 `if (method ===` 的分发条目数（`Measure-Object` = 28，P1.3 时为 25），且 `src/api/hrms.ts` 的 `*Api` 导出是 47 个，两个数都不等于 29。此后凡写入本文档的计数必须附测量命令，见第十一节 11.2。
       金额一致性实证：emp01 生成后「我的工资条」实发 `￥15796.54`，调项后 `￥16620.26`，与核算中心列表逐分对齐（非硬编码，由 mock 按 `calculateTax` 同口径现算）。
       过程中修掉一个**真实前端缺陷**（L-FE-5 冷启动画像过期）并消除一个**既存假绿**（payroll 精确数组断言），详见第九、十节。
@@ -127,7 +127,7 @@
       ⚠️ 关键实证：CI 用 `E2E_CHANNEL=chromium` 而非本地默认的 `msedge`。这条**已在本机按 CI 等价条件跑过**（`CI=true` ⇒ `workers=2` + `reuseExistingServer:false` 自建 vite dev + Playwright 自带 chromium）：**42 passed (38.8s)**。
 
 **验收**：前端 CI 绿；单测覆盖全部金额与权限相关纯函数；越权与算薪金额有自动化断言。
-      ⚠️ 诚实修正原验收口径：「CI 绿」目前**只覆盖前端**（typecheck/lint/build/**65 个 E2E**；演进：P1.3 42 → P2.2 51 → P2.3 57 → P2.4 65）。后端 242 个 `@TestCase` 与 `api-smoke.ps1` 的 112 个断言点**仍无执行环境**（L-CJ-1），对应 job 呈 skipped 而非 passed。
+      ⚠️ 诚实修正原验收口径：「CI 绿」目前**只覆盖前端**（typecheck/lint/build/**77 个 E2E**；演进：P1.3 42 → P2.2 51 → P2.3 57 → P2.4 65 → P3.1 68 → P3.2 77）。后端 242 个 `@TestCase` 与 `api-smoke.ps1` 的 112 个断言点**仍无执行环境**（L-CJ-1），对应 job 呈 skipped 而非 passed。
 
 ---
 
@@ -296,18 +296,21 @@
 - 「向后兼容」✅：既有 7 例（1 天单级闭环 / 撤回 / 驳回 / 余额边界 / 权限门）**全部原样通过**，
   其中「恰好扣满」那例因 5 天 > 3 天**必须**改走两级，已按新语义补上 HR 二级步骤而不是放宽断言。
 
-- [ ] **P3.2 站内通知中心**：新增 `sys_notification` 表（`user_id, type, title, content, ref_id, read_flag, created_at`），在「合同 30 天内到期 / 审批结果 / 工资条发放」三处触发写入；`GET /api/v1/notifications`、`PUT /api/v1/notifications/:id/read`、`POST /api/v1/notifications/read-all`；[AppLayout.vue](./frontend-web/src/layout/AppLayout.vue) 顶栏铃铛红点 + 抽屉列表 + 30s 轮询。
-  > **本轮部分交付（仅后端）**：建表 + 表 13 已在真实库执行、`notification_controller.cj`（470 行 / 39 个顶层函数，全部 `public`）、
-  > `main.cj` 4 条路由、三处触发接线 ✅；**前端铃铛 / mock 分发 / E2E / 单测文件未做**，按用户要求先提交一部分。
+- [x] **P3.2 站内通知中心**：新增 `sys_notification` 表（`user_id, type, title, content, ref_id, read_flag, created_at`），在「合同 30 天内到期 / 审批结果 / 工资条发放」三处触发写入；`GET /api/v1/notifications`、`PUT /api/v1/notifications/:id/read`、`POST /api/v1/notifications/read-all`；[AppLayout.vue](./frontend-web/src/layout/AppLayout.vue) 顶栏铃铛红点 + 抽屉列表 + 30s 轮询。
+  > **已完整交付**（后端 `b4427b1` + 本轮前端/测试）：建表 + 表 13 已在真实库执行、`notification_controller.cj`（**470 行 / 39 个顶层函数，全部 `public`**）、
+  > `main.cj` 4 条路由、三处触发接线 ✅；`notification_controller_test.cj` **727 行 / 64 `@TestCase` / 164 `@Assert`** ✅；
+  > `hrms.ts` 4 个接口 + `NotificationItem/NotificationListResult`、`AppLayout.vue` 铃铛 `el-badge` + 抽屉 + 30s 轮询 + 按 `type` 跳转 ✅；
+  > `mock-server.ts` 4 条分发（28 → **32**）+ 3 个触发点镜像 ✅；`e2e/notification.spec.ts` **351 行 / 9 用例** ✅。
+  > 为了让「点通知跳工资条 / 跳审批工作台」成立，顺带给了 `PayrollView.vue` 与 `ApprovalView.vue` 认 `route.query.tab` 的能力（后者还要求 `canApprove` 才认 `approve`，否则员工会落到不存在的页签）。
   >
   > 触发点接线比原始描述多做了一处：长假转 `PENDING_HR` 时给在职 HR 发「待你复核」，
-  > 否则二级审批只能靠 HR 自己刷工作台才发现有单。剩余清单见第九节日志与 12.15。
+  > 否则二级审批只能靠 HR 自己刷工作台才发现有单。测量值与踩坑见 12.15。
 
 **验收**（逐项标注兑付状态）：
 - 「4 天长假必须两级签完才扣年假」✅ **已兑付**（P3.1，见上方取证）。
-- 「发薪后员工铃铛出现未读消息且点击跳转工资条」🟡 **后端半条已兑付**：发薪写入 `PAYROLL_PAID` 通知的
-  SQL 与 `ref_id = 工资单ID` 已在真实库跑通（重复发薪不产生第二条，实测见第十一节）；
-  「铃铛出现未读 + 点击跳转」依赖前端，属**未交付**，登记为 L-NOTIF-3。
+- 「发薪后员工铃铛出现未读消息且点击跳转工资条」✅ **前端链路已兑付**（`e2e/notification.spec.ts` 前 3 条：批量发薪 →
+  红点 `1` → 点通知跳 `/payroll?tab=my` 并看到 `￥15796.54`；重复点发放不翻倍——这条直接钉住 `uk_user_type_ref` 语义）。
+  ⚠️ 真实库侧仍受 **L-NOTIF-3** 限制（`sys_user` 为空表 ⇒ 命中路径没在真库跑过），故整块 P3.2 标 🟡 而非 ✅。
 
 ---
 
@@ -433,7 +436,9 @@
 | 2026-11-24 | **P3.2 后端（部分交付）** | 新建 `notification_controller.cj`：SQL 文本生成、`ref_id` 去重键、`IN (...)` 拼串、行→JSON **全部抽成不碰库的纯函数**并显式 `public`（吸取 L-APR-2 教训，不给跨文件私有可见性留依赖）；`main.cj` 注册 4 条路由；三处业务触发接线；`sql/init.sql` 加**表 13 `sys_notification`** | ✅ 表 13 已在真实 `hrms_db` 执行，`SHOW CREATE TABLE` 核对字符集/唯一键/索引齐全；生成的 SQL 文本按后端同款命令行（`--batch -N -e "SOURCE f"`）实测可执行。⬜ **前端铃铛 / mock 分发 / E2E / 单测文件未做**（用户要求先提交一部分），剩余清单见 12.15 末尾 |
 | 2026-11-24 | ★ **P3.2 推翻自己写的注释** | 我为「批量发薪拼多条 INSERT」写的注释称*逐条写能让撞 UNIQUE 只影响自己那条、不把整批带崩*。写完后反查 `runMysqlFile` 命令行发现**没有 `--force`**，于是构造三语句脚本（成功 / 撞 `uk_notif_user_type_ref` / 成功）在真实库实测 | `ERROR 1062 ... at line 19 in file: ...notif_live.sql`，**第 19 行之后所有语句一条都没执行**（该脚本后面的 5 个探测段全部无输出），退出码 **1** ⇒ 我的断言是**错的**。改用 `INSERT IGNORE` 重测：B1/B2 两条都在、退出码 **0**。**修复**：`notifInsertSql` 改 `INSERT IGNORE INTO`，并在文件头与 `notifJoinInserts` 注释里如实记录「IGNORE 负责不中止、逐条负责少伤，两者作用不同」 |
 | 2026-11-24 | ★ 无 SDK 下的检查手段已接近用尽 | 补了两个临时脚本（不入仓，见 12.15）：`.cj` 括号/三引号配平 + 全项目跨文件调用符号解析 | `notification_controller.cj` **零未解析调用**；dashboard/payroll/request 对通知符号的跨文件调用**全部命中且全部 `public`**。剩余告警全是既存类别（`ReentrantMutex`/`SHA256` 等 stdlib 类型、`AuthUser`/`DeptRow` 等 `class/struct` 名、测试框架 `Assert`、`init`/`main` 入口），系脚本只采集顶层 `let/var/func` 所致，**非新增缺陷** |
-| 2026-11-24 | **用户指令变更（交付节奏）** | 原话：「不要全做完全提交，先提交一部分，其他的过几天我通知你提交」。此前我按「一口气执行到底、全部完成后再提交」推进 | 本轮改为**只提交 P3.2 后端 + 建表 + 文档回填**，提交后**暂停等通知**；剩余 5 项已按依赖顺序写进 12.15 第⑤项，下次接上不需要重新考古。分支纪律不变（仍只推 `zc`，不新建分支） |
+| 2026-11-24 | **P3.2 通知中心：前端 + mock + E2E（本轮接上「继续」后的第二批）** | 12.15 第⑤项欠债清单已按序兑付 4 项（第 5 项「建 sys_user 测试账号」仍欠，见 L-NOTIF-3） | ① `notification_controller_test.cj` **727 行 / 64 `@TestCase` / 164 `@Assert`**，期望值由 TEMP 下两份 node 镜像脚本独立复算并**整行逐字回核**（第一批 39 pins / 第二批 56 pins，各 0 MISS）；② `hrms.ts` 4 接口 + `AppLayout.vue` 铃铛 `el-badge` + 抽屉 + 30s 轮询 + 按 `type` 跳转；③ `mock-server.ts` **分发 28 → 32** + 3 个触发点镜像（`onApproveRequest`/`onPaySingle`/`onBatchPay`/`onOverview`）；④ `e2e/notification.spec.ts` **351 行 / 9 用例**。为让跳转成立，`PayrollView.vue` / `ApprovalView.vue` 补了认 `route.query.tab` 的能力（后者还要求 `canApprove`）。三连全绿、`playwright test --list` = **77 tests / 9 files**（原 68 / 8）、全量 **77 passed**。踩了 5 个坑全部记进 12.15 ⑥，其中两个改了**既存**用例：`el-drawer` 自带 `<header>` 撞 strict mode（改 `:with-header="false"`）、全局 `unread-count` 打进两条「本模块不该发别的接口」的闸门（只放行这一条具体路径） |
+| 2026-11-24 | **用户指令再次变更（优先级 + 交付节奏）** | 原话：「这次主要方向是增加必要的功能，要体现工作量，可以适当减轻那些如安全性的开发内容，因为体现不出工作量大小。你每完成一批功能后注意要更新到仓库中的zc分支」 | ① 覆盖「先做记号、过几天再提交」——改为**每完成一批就 commit + push `zc`**；② 安全加固类（注入面、越权矩阵、`sqlSafety` 断言）**降级为顺带产出，不再单独开工**，因为它的行数体现不出功能量；③ 下一批 = **P4.1 培训与学分**（建表 + 控制器 + 路由 + 前端页 + 仓颉单测 + mock 分发 + E2E 全链路一次做完） |
+| 2026-11-24 | **计量纠偏（第三次）**：`powershell -File` 子进程看到的是**过期文件系统快照** | 同一份 `notification_controller_test.cj`，脚本内 `Get-Content` 报 690 行、内联命令报 727 行（`Read` 工具末行号 727 为权威）；`notification_controller.cj` 同样报 432 vs 470 | 台账里所有行数/条数**只用内联命令、`Read` 末行号或 `git --numstat` 取**，不得用 `-File` 跑的脚本回填。本节新写的 9 files / 1571(+) / 10(−) 与 55 files / 15170 / 152 均取自 `git diff --numstat` 与 `git diff --shortstat 6e79923 HEAD`（提交后须复跑对账，命令见 13.5 口径 1） |
 
 
 ---
@@ -455,7 +460,7 @@
 | ~~L-FE-3~~ | ~~`UserProfile.isActive` 在 TS 里标成 `number`，而 `auth_controller.cj:34` 出参是 `${r[4] == "1"}`（**布尔**）~~ | ~~任何 `user.isActive === 1` 的写法静默恒假，且 `vue-tsc` 不会报错~~ | ✅ **已修**：类型改为 `boolean` 并注释标明后端出处；mock 里原有的 `true as unknown as number` 强转一并删除（该强转本身就是这个偏差的化石证据）。当前无消费方，属**消除陷阱**而非修复线上故障 |
 | ~~L-FE-4~~ | ~~考勤「修正」弹窗只回传 `status`/`remark`，后端对 `lateMinutes`/`earlyMinutes` 取 `getJsonInt(..., 0)`~~ | ~~一次修正即把迟到分钟数清零，进而让「迟到/早退次数」与算薪扣款失真~~ | ✅ **已修 + 已加回归锁**：[attendance.spec.ts:144](./frontend-web/e2e/attendance.spec.ts) 「修正考勤不得抹掉迟到分钟数」钉住回传当前分钟数这一行为 |
 | ~~L-FE-5~~ | ~~`auth.user` 只从 `localStorage.hrms_user` 水合（登录那一刻的快照），旧守卫仅在 `!auth.user` 时回源 `/auth/me` ⇒ **整页刷新永不刷新画像**~~ | ~~管理员被改角色后仍按旧角色放行菜单；审批通过的年假已扣但页面显示旧余额；账号被禁用仍停留在已登录视图~~ | ✅ **已修**：[router/index.ts](./frontend-web/src/router/index.ts) 增加模块级 `profileSynced`，每次整页加载后首次进入受保护路由强制 `refreshProfile()` 一次（来源为 `/login` 时跳过）。回归由 `approval.spec.ts` 的三处年假余额断言（含 `page.reload()` 后仍为 `4`）钉死。**注意**：该守卫的 `catch` 对 401 以外的异常**保留本地画像放行**，这是刻意取舍——不能让后端抖动把已登录用户踢下线，代价是极端情况下仍可能短暂看到旧数据 |
-| L-MOCK-1 | E2E 的 28 条 `route()` 分发条目（口径见 11.2，原写「29 个接口」系口算错）由**有状态内存 mock** 提供，`E2E_REAL=1` 直连真实后端的路径**从未跑过**（无 SDK，后端起不来） | 「65 passed」证明的是**前端逻辑 + 前端对契约的理解**自洽，不等于**后端实现无缺陷** | 与 `L-SMOKE-1` 同性质。所有 mock 契约均逐字段 `Read` 自 `backend-cangjie/src`（第九节有取证行），SDK 就位后首件事是 `E2E_REAL=1` 复跑；届时失败**默认判为 mock 与后端的漂移**，以源码为准修 mock。**P2.2 新入这条风险的最大实例**：mock 此前**完全没有 `/employees` 路由**，员工花名册在 P1.3~P2.1 期间其实是「前端写好、E2E 从未覆盖列表」的空白区，直到 P2.2 需要「导入后回列表检索」才暴露 ⇒ 已补 `GET /employees`（20 出参 + 4 筛选 + MANAGER 限本部门 + 分页回落）与 `POST /employees/import` |
+| L-MOCK-1 | E2E 的 32 条 `route()` 分发条目（口径见 11.2，原写「29 个接口」系口算错）由**有状态内存 mock** 提供，`E2E_REAL=1` 直连真实后端的路径**从未跑过**（无 SDK，后端起不来） | 「77 passed」证明的是**前端逻辑 + 前端对契约的理解**自洽，不等于**后端实现无缺陷** | 与 `L-SMOKE-1` 同性质。所有 mock 契约均逐字段 `Read` 自 `backend-cangjie/src`（第九节有取证行），SDK 就位后首件事是 `E2E_REAL=1` 复跑；届时失败**默认判为 mock 与后端的漂移**，以源码为准修 mock。**P2.2 新入这条风险的最大实例**：mock 此前**完全没有 `/employees` 路由**，员工花名册在 P1.3~P2.1 期间其实是「前端写好、E2E 从未覆盖列表」的空白区，直到 P2.2 需要「导入后回列表检索」才暴露 ⇒ 已补 `GET /employees`（20 出参 + 4 筛选 + MANAGER 限本部门 + 分页回落）与 `POST /employees/import` |
 | L-MOCK-2 | mock 是「按我读到的源码写的」，存在**读错字段**的残余风险 | 字段名/口径同时写错时 mock 与 spec 会自洽假绿 | 缓解手段是 teardown 的 `unmatched == []` 闸门（前端发起而 mock 未实现的接口必红）+ 分页/鉴权分支照抄后端语义；**根治手段只有 `E2E_REAL=1`**，见 L-MOCK-1 |
 | L-E2E-1 | 整页加载后的 `page.on('request')` 监听器**只能在导航之后挂载**，早于监听器完成的请求采不到 | 对采到的请求做 `toEqual([精确数组])` 会退化成**计时器**，随机假绿/假红（`payroll.spec.ts` 的旧断言就假绿了若干轮才被揭穿） | 纪律固化：**导航后一律断言「不该出现的为空集」+ `toContain(关键项)`，禁止精确数组**；确需精确计数时改用 `page.route` 侧计数（拦截点必然全采） |
 | L-E2E-2 | `--workers` 在本终端默认取到 `2`（`CI` 环境变量为真） | 与本地 `vite` 单实例预览服务并发时偶发抖动，报错形态像用例问题 | 本地复跑显式 `--workers=1`；CI 里由 Playwright 自己起 preview，不受此影响 |
@@ -483,7 +488,7 @@
 | **L-APR-3** | 审批状态机、审批链写入、以及 `UNIQUE(request_id, step)` 冲突 → `executeSql` 返回 false → 500 这条并发保护分支，**全部未经编译与真实运行** | E2E 的 10 例绿只证明「前端 + TS 镜像的状态机」自洽，不能证明仓颉那份实现对 `Float64` 比较、`IN (...)` 拼串、事务顺序的处理正确 | 与 L-CJ-1/L-MOCK-1 同性质。已做的兜底：①15 个纯函数写了 33 个 `@TestCase`，期望值用 node 按同算法独立复算过；②状态机在 TS 里**逐函数重写一遍**作为交叉实现（两份同源不同人写的实现能对齐，说明至少不是笔误）；③`step` 取值刻意放在改写 `row.status` **之前**，这类顺序坑已在代码注释里标明。根治仍是 `cjpm build && cjpm test` + `E2E_REAL=1` |
 | L-NOTIF-1 | **P3.2**：存量库不会自动获得 `sys_notification` | `sql/init.sql` 用的是 `CREATE TABLE IF NOT EXISTS`，**只在全新初始化时生效**；已建好的库里没有这张表，`notification_controller` 的每条 SQL 都会以 `ERROR 1146 (42S02) Table 'hrms_db.sys_notification' doesn't exist` 失败，而 `executeSql` 返回 `Bool` 且**调用侧不检查** ⇒ 通知静默丢失，接口返回空列表，前端看不出异常 | 本轮已在开发库 `hrms_db` 手工执行 DDL（`SHOW CREATE TABLE` 已核对），但**仓库内没有迁移脚本**。部署到任何其它库都必须二选一：重跑 `init.sql`，或单独执行第十一节记录的建表语句。根治 = 补一份带版本号的迁移 SQL（与 L-APR-1 同一项欠债，建议合并处理） |
 | L-NOTIF-2 | 合同到期提醒的**触发时机是设计缺陷级取舍** | 触发点挂在 `handleDashboardOverview`（因为只有它已经查出 30 天内到期的行集），意味着**只有 ADMIN/HR 打开工作台时才会生成提醒**；若 HR 整个月不登录，到期提醒一条都不会产生——这恰好是最需要提醒的场景 | 已在注释里写明该取舍。根治需定时任务（仓颉侧无现成调度），或改为「登录时扫描一次」并放宽为只读扫描 + 首次命中写库。验收时不得把「工作台能看到到期列表」当成「通知已按时生成」 |
-| L-NOTIF-3 | P3.2 验收项**尚未兑付**：`sys_user` 当前为空表 | `SELECT COUNT(*) FROM sys_user` → **0**（同库 `hr_employee` → 5）⇒ 本轮只能验证 SQL 语法与空结果不报错，**员工→账号映射的命中路径完全未验证**（`notifResolveUser` 返回 0 时 `pushNotification` 直接丢弃通知，属正确行为但没人实测过）；「发薪后员工铃铛出现未读且点击跳转工资条」依赖前端铃铛，本轮未交付 | 建测试账号后复跑第十一节记录的 SQL 探测脚本（`notifUserMapSql` 段），并在 P3.2 前端交付时补 E2E 验收项。在此之前，第五节验收清单该项保持 🟡 不得改 ✅ |
+| L-NOTIF-3 | P3.2 的**员工→账号映射命中路径仍只在 mock 里验证过**，真实库 `sys_user` 依旧是空表 | `SELECT COUNT(*) FROM sys_user` → **0**（同库 `hr_employee` → 5）⇒ `notifResolveUser` 在真实库上恒返回 0，`pushNotification` 直接丢弃通知——**接口不会报错，但一条通知也不会落库**。本轮交付的前端铃铛 + 9 条 E2E 全部跑在有状态 mock 上（mock 用 `accounts.find(a => a.employeeId === e && a.isActive)` 复刻了同一条映射，见 `notifUserIdByEmp`），所以**验证的是我对契约的理解，不是真实库的行为** | 建 `sys_user` 测试账号后复跑第十一节记录的 `notifUserMapSql` 探测段，并在 SDK 就位后用 `E2E_REAL=1` 复跑 `e2e/notification.spec.ts`。在此之前第五节验收清单该项标 🟡（前端已交付、真实库未验证），不得改 ✅ |
 
 ---
 
@@ -666,7 +671,7 @@
 ### 11.2 文档计数纪律（P2.2 建立，起因是本文档自己犯过一次口算错）
 
 P1.3 收口时把 mock 覆盖量写成「**29 个接口**」，沿用数轮到 P2.2 才被发现：实测 `mock-server.ts` 里
-`if (method ===` 的分发条目只有 25 条（P2.2 后 27 条，P2.4 后 28 条），`src/api/hrms.ts` 的 `*Api` 导出是 47 个，
+`if (method ===` 的分发条目只有 25 条（P2.2 后 27 条，P2.4 后 28 条，P3.2 后 32 条），`src/api/hrms.ts` 的 `*Api` 导出是 47 个，
 **两个口径都得不出 29**。这类数字一旦进入文档就会被后续章节当事实引用，危害等同于代码里的错断言。
 
 **规则**：写入本文档的**任何计数**（接口数、用例数、断言点数、文件数、行数）必须满足：
@@ -1073,7 +1078,7 @@ mock 分发条数与 E2E：
 
 | 项 | 实测值 | 复跑命令 |
 | --- | --- | --- |
-| `mock-server.ts` 分发条目 | **28**（P3.1 未新增路由，只重写 `onApproveRequest` 语义） | `(Select-String -Path frontend-web/e2e/support/mock-server.ts -Pattern 'if \(method ===' \| Measure-Object).Count` |
+| `mock-server.ts` 分发条目 | **28**（P3.1 未新增路由，只重写 `onApproveRequest` 语义；P3.2 后为 **32**，见 12.15） | `(Select-String -Path frontend-web/e2e/support/mock-server.ts -Pattern 'if \(method ===' \| Measure-Object).Count` |
 | `approval.spec.ts` 用例数 | 7 → **10** | `npx playwright test e2e/approval.spec.ts --list` |
 | 全量 E2E | **68 passed / 0 failed**（此前基线 65） | `npx playwright test --workers=1` → `1.3m` |
 | 静态口径互证 | `Total: 68 tests in 8 files` | `npx playwright test --list` |
@@ -1101,10 +1106,10 @@ P3.1 状态机的 ground truth（仓颉与 TS 两份实现**必须逐格相同**
 npx playwright test e2e/approval.spec.ts --grep "长假" --workers=1
 ```
 
-### 12.15 P3.2 站内通知中心（后端部分交付）的测量值
+### 12.15 P3.2 站内通知中心的测量值（后端 `b4427b1` + 前端/测试本次提交）
 
-> 本轮按用户要求**只交付并提交后端**，因此本节一半是「实测值」，一半是「欠债清单」——
-> 后者写在这里是为了下次接着做时不用重新考古。所有数字取自命令实跑输出（11.2 纪律）。
+> 本节分两次写：①~④ 是后端那一批的实测值与欠债清单；⑤ 记录欠债的兑付情况；⑥ 是第二批（单测/前端/mock/E2E）的测量值。
+> 所有数字取自命令实跑输出（11.2 纪律），不写「大约」。
 
 **① 本次提交的逐文件 `numstat`（对比 `HEAD`，即 `7174898`）**：
 
@@ -1146,20 +1151,51 @@ npx playwright test e2e/approval.spec.ts --grep "长假" --workers=1
 | 转义往返（`'`、`\`、`"`、真实 CRLF） | `CHAR_LENGTH = 13` 与输入等长；`HEX` 显示 `27 / 5C / 22 / 0D0A` 均为单字节原样 |
 | 纯函数镜像自检（9 项：注入串、限额、空 `IN` 列表、非法 type…） | **9 / 9 通过**，含 `notifStrList([]) == "''"`（回落值错误会让整条 SQL 语法失败） |
 
-**④ 前端三连（本轮零前端改动，跑它是为了证明「没被我带崩」而非「我做了前端」）**：
+**④ 第一批的前端三连（那一轮零前端改动，跑它是为了证明「没被我带崩」而非「我做了前端」）**：
 `vue-tsc --noEmit` exit **0** / `eslint --max-warnings 0` exit **0** / `npm run build` exit **0**（`✓ built in 7.92s`，
-唯一告警是既存的 chunk > 500 kB 提示）。`npx playwright test --list` 仍为 **68 tests in 8 files**，未增删用例。
+唯一告警是既存的 chunk > 500 kB 提示）。`npx playwright test --list` 当时仍为 **68 tests in 8 files**，未增删用例
+——第二批加入 `notification.spec.ts` 后为 **77 tests in 9 files**，三连与全量的最新值见下方 ⑦。
 
-**⑤ 欠债清单（下次接到「继续」时的确定起点，按依赖顺序）**：
-1. `notification_controller_test.cj`：39 个纯函数里**可脱离数据库的全测**，期望值用 node 镜像独立复算（同上 9 项自检的扩展）。
-2. `src/api/hrms.ts` 4 个接口 + `NotificationItem`；`AppLayout.vue` 顶栏 `el-badge` 铃铛 + 抽屉列表 +
-   `onMounted` 30s `setInterval` / `onUnmounted` 清理 + 按 `type` 跳转（`PAYROLL_PAID`→`/payroll/my`、
-   `LEAVE_*`→`/approval`、`CONTRACT_EXPIRING`→`/employees`）。
-3. `mock-server.ts` 4 条分发：**分发数 28 → 32**，需同步第三节口径与 12.x 各表的「mock 分发数」；
-   `read-all`/`unread-count` 两个固定路径同样要排在 `:id` 之前（镜像后端的路由顺序坑）。
-4. `e2e/notification.spec.ts`：验收项「发薪后铃铛出现未读且点击跳工资条」+ 越权改他人通知（应 404 不是 200）+
-   `read-all` 后红点归零 + **重复发薪不产生第二条**（这条直接测的就是本轮的 UNIQUE 语义）。
-5. 建 `sys_user` 测试账号，把 L-NOTIF-3 的命中路径补上。
+**⑤ 上一轮的欠债清单——本轮（P3.2 第二批）兑付情况**：
+1. ✅ `notification_controller_test.cj`：727 行 / **64 `@TestCase` / 164 `@Assert`**，39 个纯函数里可脱离数据库的
+   全部覆盖，期望值由 `TEMP` 下两份 node 镜像脚本**独立复算 + 整行逐字回核**（第一批 39 pins、第二批 56 pins，
+   各 0 MISS）。⚠️ 两条踩坑记录见下方 ⑥。
+2. ✅ `src/api/hrms.ts` 4 个接口 + `NotificationItem/NotificationListResult`；`AppLayout.vue` 顶栏
+   `el-badge`（`:max="99"`、`unread===0` 隐藏）+ 抽屉列表 + `onMounted` 30s `setInterval` / `onBeforeUnmount` 清理
+   + 按 `type` 跳转（`PAYROLL_PAID`→`/payroll?tab=my`、`LEAVE_NEXT_LEVEL`→`/approval?tab=approve`、
+   `LEAVE_APPROVED/REJECTED`→`/approval`、`CONTRACT_EXPIRING`→`/employee`，与文档里预写的 `/payroll/my`、
+   `/employees` 不同——**以路由表为准**，`main.ts` 里根本没有这两条路径）。
+3. ✅ `mock-server.ts` 4 条分发：**分发数 28 → 32**（第三节与 11.2 口径已同步）；`unread-count` / `read-all`
+   两条固定路径同样排在 `/notifications/:id/read` 之前，镜像后端的路由顺序坑。
+4. ✅ `e2e/notification.spec.ts`：351 行 / 9 用例，覆盖验收项「发薪后铃铛出现未读且点击跳工资条」、
+   重复发薪不产生第二条、单条已读只减 1 不清零、通过/驳回两条 ref 互不吞掉、长假 `LEAVE_NEXT_LEVEL` 只发一次、
+   合同到期仅 HR/ADMIN、全部已读与重复点击、越权 PUT 他人通知 **404 且对方仍是未读**、脏 `readFlag`/`limit=9999` 回落。
+5. ⬜ 建 `sys_user` 测试账号补命中路径——**仍欠**（见更新后的 L-NOTIF-3）。
+
+**⑥ 本轮新增的取证与踩坑（三条都是现场撞出来的，不是推演）**：
+| # | 现象 | 结论 / 处置 |
+| --- | --- | --- |
+| 1 | 我给「内容里同时含 `'` 与 `\`」写的单测期望永远为假 | 起因是把仓颉**输入字面量**写成了已转义的形状（`"含\\'引号\"和\\\\斜杠"` 解码后带多余反斜杠），与镜像里的 `js` 串不一致。`sqlEscape` 只处理 `\` `'` CR LF、**不转义 `"`**，`jsonEscape` 反之**不转义 `'`**——两个方向混在一条断言里必然对不上。拆成「只含单引号」与「只含反斜杠」两条，逐条按规则重算后 39/39 命中 |
+| 2 | `el-drawer` 让 3 个既存用例红（`locator('header')` strict mode 命中 2） | 抽屉自带的标题行渲染成语义 `<header>`，与布局顶栏同名，**即使抽屉从未打开也在 DOM 里**。改为 `:with-header="false"` + 正文首行自绘标题（`aria-label` 仍取 `title`），不动任何既存断言 |
+| 3 | 全局铃铛把两条「本模块不该发别的接口」的断言打成红 | `payroll.spec.ts:89` 与 `rbac-menu.spec.ts` 的 `trackProtectedApi` 都是**路由级越权闸门**，而 `unread-count` 属于布局级轮询，任何页面都会发。只在两处白名单里加 `/api/v1/notifications/unread-count` 这一条**具体路径**（刻意不放整段 `/notifications`，抽屉列表仍必须用户点开才会发） |
+| 4 | 第二次 `signIn(page, ...)` 一律 30s 超时 | 同一 context 已持有 token，`/login` 被 `router.beforeEach` 弹回首页，`请输入用户名` 永不出现。**换角色必须走 `openRole()`**（新 context = 新 localStorage）；另外顶栏未读数只在 `onMounted`/开抽屉时刷新，页内原地触发的新通知不会自己变红点 |
+| 5 | 用例里显式 `page.close()` 会漏出 vite 代理噪音 | 审批提示 `ElMessage.success` 之后组件还在 `refreshProfile` + 两个列表刷新，提前关上下文把在途请求甩给了 8080（表现为 `ECONNREFUSED`）。fixtures 的 teardown 本就统一回收，**删掉显式 close** 即可 |
+
+**⑦ P3.2 第二批测量值（全部内联命令实跑，逐条可复跑；⚠️ 勿用 `powershell -File` 取数，见第九节日志「计量纠偏（第三次）」）**：
+
+| 对象 | 实测 | 复跑命令 |
+| --- | --- | --- |
+| `notification_controller_test.cj` | **727 行 / 64 `@TestCase` / 164 `@Assert`**（原目标 ≥150 AS，超额 9%） | `(Get-Content ...notification_controller_test.cj).Count`；条数用 Grep 计数 |
+| `e2e/notification.spec.ts` | **351 行 / 9 `test(`** | 同上 |
+| `mock-server.ts` | **2066 行**，`if (method ===` **32 条**（P3.1 为 28） | `(Select-String -Pattern 'if \(method ===' \| Measure-Object).Count` |
+| `AppLayout.vue` / `hrms.ts` | **337 行**（+113）/ **188 行**（+15） | 同上 |
+| `vue-tsc` / `eslint src` / `npm run build` | **exit 0**（`build 17.27s`，唯一告警是既存 chunk > 500 kB） | 三连 |
+| `playwright test --list` | `Total: 77 tests in 9 files`（原 68 / 8 files） | `npx playwright test --list` |
+| 全量 E2E | **77 passed / 0 failed**（`--workers=2`，2.0m），`mock.unmatched == []` 闸门全绿 | `npx playwright test --reporter=line` |
+
+⚠️ 一处**故意没有做**：抽屉列表接口对「本人之外」的数据可见性完全依赖后端 `WHERE user_id = ?`，
+我没有为它单独加安全断言——按用户本轮指令（「适当减轻那些如安全性的开发内容，因为体现不出工作量大小」），
+这部分只在 ⑤4 里留了一条越权 404 的 E2E 兜底，不再展开注入面/矩阵类工作。
 
 ---
 
@@ -1227,8 +1263,9 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 | 我：`86f7b8f` P2.3 工资条打印 | **4 files / 715 insertions(+), 13 deletions(-)**（代码 **603** 行，其余为本文档增量，逐项见 12.12） |
 | 我：`8195ff2` P2.4 考勤月度汇总 | **9 files / 1441 insertions(+), 17 deletions(-)**（逐项见 12.13，仓颉侧含 539 行新单测） |
 | 我：`7174898` P3.1 长假二级审批（**已提交**） | **8 files / 1364 insertions(+), 64 deletions(-)**；排除本文档（173/6）= **7 files / 1191(+), 58(−)**，逐项见 12.14 |
-| 我：P3.2 站内通知中心（后端部分交付，**在工作区**） | 本次 **6 files / 527(+), 3(−)**（`notification_controller.cj` 470/0 新增、`main.cj` 11/0、`request_controller.cj` 10/0、`dashboard_controller.cj` 9/1、`payroll_controller.cj` 8/1、`init.sql` 19/0），逐项见 12.15；⚠️ **只交付后端**，前端/mock/E2E/单测按用户要求留到下一次 |
-| **代码累计（含工作区 P3.2，排除本文档）** | **53 files / 13599 insertions(+), 142 deletions(-)** |
+| 我：`b4427b1` P3.2 通知中心（**后端已提交**） | **7 files / 666 insertions(+), 9 deletions(-)**；排除本文档（139/7）= **6 files / 527(+), 2(−)**（`notification_controller.cj` 470/0、`main.cj` 11/0、`request_controller.cj` 10/0、`dashboard_controller.cj` 9/1、`payroll_controller.cj` 8/1、`init.sql` 19/0），逐项见 12.15 |
+| 我：P3.2 通知中心（**前端/测试/单测，本次提交**） | **9 files / 1571 insertions(+), 10 deletions(-)**：新增 `notification_controller_test.cj` 727/0、`e2e/notification.spec.ts` 351/0；改动 `AppLayout.vue` 147/2、`mock-server.ts` 287/2（分发 28→32）、`hrms.ts` 27/0、`ApprovalView.vue` 12/2、`PayrollView.vue` 11/1、`rbac-menu.spec.ts` 5/1、`payroll.spec.ts` 4/2。⚠️ 逐文件数字取自**暂存后**的 `git diff --cached --numstat`（`git add -A` 会把这些 LF 文件按 `core.autocrlf` 归一化，暂存前的 `git diff --numstat` 给出的是另一套数——首轮我就把 mock 记成了 331/0） |
+| **代码累计（本次提交后实测，排除本文档）** | **56 files / 15165 insertions(+), 147 deletions(-)**（`git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"`）。⚠️ 上一版预测的「55 files / 15170 / 152」= 旧累计 + 本批 numstat，**实测对不上**（差 1 file / −5(+) / −5(−)），成因是 `git add -A` 对若干历史 LF 文件做了行尾归一化 ⇒ **累加式估算不可信，必须每次跑整段 diff** |
 | 含文档累计（`86f7b8f` 提交后实测） | 45 files / 11220 insertions(+), 147 deletions(-) |
 
 三条口径说明：
@@ -1242,11 +1279,10 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 3. 旧版本本节写过「8 files」「38 files / 8082 insertions」「约 29%」，三个数**都是当时口算的**，
    现已全部替换为 `git show --shortstat` 输出（P0 实为 11 files，不是 8）。这正是 11.2 立纪律的直接动因。
 
-⚠️ 诚实结论：按代码插入量 **13599 / 27803 ≈ 48.9%**（P3.2 后端部分交付，上一版 47%），
-**刚越过用户要求的「至少匹配现有需求量」这条线，但越得很薄**——
-且这是把 P3.2 **只做了一半**就算进去的数，所以真正的完成率要看条数而非行数：
-**需求 23 条里已完整交付 15 条、P3.2 交付半条、余 7.5 条未开工**。
-剩余 P3.2 前端 / P4.1 / P4.2 是主要来源，其中 P4 两个新模块要同时落
+⚠️ 诚实结论：按代码插入量 **15165 / 27803 ≈ 54.5%**（P3.2 已完整交付，上一版 48.9%），
+**越过用户要求的「至少匹配现有需求量」这条线，但仍不厚**——
+**需求 23 条里已完整交付 16 条，余 7 条未开工**（P3.2 不再是半条，只剩真实库账号命中路径这一项受 L-NOTIF-3 限制）。
+剩余 P4.1 / P4.2 是主要来源，这两个新模块要同时落
 「建表 + 后端 controller + 仓颉单测 + 前端视图 + 路由注册 + mock + E2E」，是唯一有希望把比值推向 60%+ 的工作包；
 P5 的 5 份交付文档**不计入**上面的分子（口径 1）。行数仍不是目标，可验证的功能与测试才是 ——
 但用户这句话本身是可量化的，所以我不拿「质量优先」当借口回避它。
