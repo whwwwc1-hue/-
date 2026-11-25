@@ -1451,3 +1451,13 @@ git push origin --delete trae/hrms-work   => - [deleted]  trae/hrms-work
 其 upstream 曾由 13.6 的 `-u` 指向已删除的 `origin/trae/hrms-work`，需知悉这一点（不影响 `zc` 的推送）。
 
 L-CI-1 的 PR 入口随之改为 `https://github.com/whwwwc1-hue/-/pull/new/zc`，其余闭合条件不变。
+
+### 13.8 P4.1 后端切片的推送与「代理状态反转」（2026-11-26）
+
+| 项 | 值 |
+| --- | --- |
+| 本批 commit | `e251a9d`（6 files / **2727(+), 12(−)**，含台账 96 行；纯代码 **5 files / 2637(+), 6(−)**，与 12.16 ① 一致） |
+| 推送结果 | `e3a38ba..e251a9d HEAD -> zc`，fast-forward；`git ls-remote --heads origin zc` 复测 = `e251a9d`，**无 force、未新建分支、未动 main/zys** |
+| ⚠️ 代理结论**反转** | 13.5 记的是「代理失效，必须 `git -c http.proxy= -c https.proxy= push`」。**本次该命令直接失败**：`curl 28 / RPC failed; Recv failure: Connection was reset`，连 `ls-remote` 都取不到 ref。实测注册表 `ProxyEnable = 1`、`ProxyServer = 127.0.0.1:7890` 已恢复可用，**改用默认配置（带代理）才推送成功** |
+| 下次怎么做 | 先 `Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'` 看 `ProxyEnable`：为 `1` 就**不要**清空代理，直接 `git push origin HEAD:refs/heads/zc`；为 `0` 才用 13.5 的清空代理写法。两者都失败再考虑 `dangerouslyDisableSandbox`（本次沙箱内带代理可通，无需绕行） |
+
