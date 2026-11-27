@@ -245,6 +245,36 @@ func dispatchRequest(ctx: HttpContext): Unit {
             if (id > 0 && segs[4] == "signup" && method == "DELETE") { handleTrainingUnsignup(ctx, id); return }
         }
 
+        // Expense (P4.2 差旅与报销) routes
+        // 顺序纪律同 Training：my / pending / stats / settlement 是固定段，必须排在
+        // /:id 分支之前——它们的段数与 /expenses/:id 相同（4 段），一旦让 parseIntId 先跑，
+        // "my" 会解析成 0 并一路掉到 404，看起来像「接口不存在」而不是路由顺序错了。
+        if (path == "/api/v1/expenses/my" && method == "GET") { handleExpenseMy(ctx); return }
+        if (path == "/api/v1/expenses/pending" && method == "GET") { handleExpensePending(ctx); return }
+        if (path == "/api/v1/expenses/stats" && method == "GET") { handleExpenseStats(ctx); return }
+        if (path == "/api/v1/expenses/settlement" && method == "GET") { handleExpenseSettlement(ctx); return }
+        if (path == "/api/v1/expenses" && method == "GET") { handleExpenseList(ctx); return }
+        if (path == "/api/v1/expenses" && method == "POST") { handleExpenseCreate(ctx); return }
+        if (segs.size == 4 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "expenses" && method == "GET") {
+            let id = parseIntId(segs[3])
+            if (id > 0) { handleExpenseDetail(ctx, id); return }
+        }
+        if (segs.size == 4 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "expenses" && method == "PUT") {
+            let id = parseIntId(segs[3])
+            if (id > 0) { handleExpenseUpdate(ctx, id); return }
+        }
+        if (segs.size == 4 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "expenses" && method == "DELETE") {
+            let id = parseIntId(segs[3])
+            if (id > 0) { handleExpenseDelete(ctx, id); return }
+        }
+        if (segs.size == 5 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "expenses") {
+            let id = parseIntId(segs[3])
+            if (id > 0 && segs[4] == "submit" && method == "POST") { handleExpenseSubmit(ctx, id); return }
+            if (id > 0 && segs[4] == "withdraw" && method == "POST") { handleExpenseWithdraw(ctx, id); return }
+            if (id > 0 && segs[4] == "approve" && method == "POST") { handleExpenseApprove(ctx, id); return }
+            if (id > 0 && segs[4] == "pay" && method == "POST") { handleExpensePay(ctx, id); return }
+        }
+
         // System routes
         if (path == "/api/v1/system/users" && method == "GET") { handleSystemUsers(ctx); return }        if (segs.size == 5 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "system" && segs[3] == "users" && method == "PUT") {
             let id = parseIntId(segs[4])

@@ -216,7 +216,7 @@ CREATE TABLE IF NOT EXISTS hr_approval_log (
 CREATE TABLE IF NOT EXISTS sys_notification (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id BIGINT NOT NULL COMMENT '接收人(sys_user.id)',
-    type VARCHAR(30) NOT NULL COMMENT 'CONTRACT_EXPIRING/LEAVE_APPROVED/LEAVE_REJECTED/LEAVE_NEXT_LEVEL/PAYROLL_PAID/TRAINING_PUBLISHED',
+    type VARCHAR(30) NOT NULL COMMENT 'CONTRACT_EXPIRING/LEAVE_APPROVED/LEAVE_REJECTED/LEAVE_NEXT_LEVEL/PAYROLL_PAID/TRAINING_PUBLISHED/EXPENSE_SUBMITTED/EXPENSE_APPROVED/EXPENSE_REJECTED/EXPENSE_PAID',
     title VARCHAR(120) NOT NULL COMMENT '标题（代码拼装，不含用户输入）',
     content VARCHAR(500) DEFAULT NULL COMMENT '正文（代码拼装，不含用户输入）',
     ref_id VARCHAR(64) NOT NULL DEFAULT '' COMMENT '业务跳转键，见上方注释',
@@ -312,3 +312,56 @@ INSERT IGNORE INTO hr_training_record (id, training_id, employee_id, status, che
 (1, 3, 2, 'ATTENDED', NOW() - INTERVAL 10 DAY, 88.0, 1.5, NULL),
 (2, 3, 4, 'ATTENDED', NOW() - INTERVAL 10 DAY, 55.0, 0.0, '补考安排在下季度'),
 (3, 3, 5, 'ABSENT', NULL, NULL, 0.0, '入职当周未参加');
+
+-- 16. 差旅与报销表（P4.2）
+-- 状态机：DRAFT ->(submit) SUBMITTED ->(approve) APPROVED ->(pay) PAID；
+--         SUBMITTED ->(reject) REJECTED；REJECTED ->(submit) SUBMITTED（修改后重报）；
+--         SUBMITTED ->(withdraw) DRAFT（本人撤回）；PAID 为终态。
+-- 判定逻辑全部在 expense_controller.cj 的纯函数里，这里只负责把「不该发生的组合」挡在库外。
+-- receipt_no 允许 NULL（小额无票场景）：MySQL 的 UNIQUE 允许多行 NULL，
+-- 因此「无票」不会被误判成重复票号，而真实票号仍然同员工同月唯一。
+CREATE TABLE IF NOT EXISTS hr_expense (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    employee_id BIGINT NOT NULL COMMENT '报销人(hr_employee.id)',
+    category VARCHAR(20) NOT NULL DEFAULT 'OTHER' COMMENT 'TRAVEL差旅/TRANSPORT交通/MEAL餐费/OFFICE办公/OTHER其他',
+    title VARCHAR(120) NOT NULL COMMENT '报销事由',
+    amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00 COMMENT '报销金额（元），实报实销，不计入 hr_payroll 应税项',
+    occur_date DATE NOT NULL COMMENT '费用发生日期',
+    pay_month VARCHAR(7) NOT NULL COMMENT '报销所属月份 YYYY-MM，必须等于 occur_date 所在月',
+    city VARCHAR(64) NOT NULL DEFAULT '' COMMENT '出差城市，仅 TRAVEL 必填',
+    days INT NOT NULL DEFAULT 0 COMMENT '出差天数，仅 TRAVEL 有效（1-60），非差旅恒为 0',
+    receipt_no VARCHAR(64) DEFAULT NULL COMMENT '发票号，同员工同月唯一（NULL=无票）',
+    status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT/SUBMITTED/APPROVED/REJECTED/PAID',
+    submit_user_id BIGINT NOT NULL DEFAULT 0 COMMENT '提交人用户ID(sys_user.id)，0=尚未提交；用于自审闸门',
+    submitted_at DATETIME DEFAULT NULL COMMENT '提交时间（撤回后清空）',
+    approver_user_id BIGINT NOT NULL DEFAULT 0 COMMENT '审批人用户ID，0=未审批',
+    approve_remark VARCHAR(255) DEFAULT NULL COMMENT '审批意见',
+    approved_at DATETIME DEFAULT NULL COMMENT '审批时间（通过或驳回都写）',
+    paid_at DATETIME DEFAULT NULL COMMENT '报销款发放时间',
+    paid_by BIGINT NOT NULL DEFAULT 0 COMMENT '发放操作人用户ID',
+    remark VARCHAR(255) DEFAULT NULL COMMENT '报销人备注',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_expense_emp_month_receipt (employee_id, pay_month, receipt_no),
+    KEY idx_expense_emp_month (employee_id, pay_month),
+    KEY idx_expense_status (status)
+) ENGINE=InnoDB COMMENT='差旅与报销表';
+
+-- 报销种子数据：occurrence 用 NOW() 相对量表达，pay_month 由同一个偏移量算出，
+-- 保证任何时候重建库都满足「月份一致」闸门（这是本模块最强的业务约束）。
+-- 覆盖：5 个类别 / 5 个状态各至少 1 条 / 1 笔 >5000 的差旅（演示审批档位）/
+--       1 笔 TRAVEL 带 city+days / 同一员工同一月两张不同票号（演示 UNIQUE 只挡重复票号）。
+-- ⚠️ 刻意不放「同员工同月重复票号」的负例：那会被 UNIQUE 直接拒绝，种子会静默少一行。
+INSERT IGNORE INTO hr_expense (id, employee_id, category, title, amount, occur_date, pay_month, city, days, receipt_no, status, submit_user_id, submitted_at, approver_user_id, approve_remark, approved_at, paid_at, paid_by, remark) VALUES
+(1, 4, 'TRAVEL', '上海客户现场支持差旅', 4860.00, DATE_FORMAT(NOW() - INTERVAL 45 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 45 DAY, '%Y-%m'), '上海', 4, 'FP2026SH0401', 'PAID', 4, NOW() - INTERVAL 44 DAY, 2, '客户项目必要支出，同意', NOW() - INTERVAL 43 DAY, NOW() - INTERVAL 40 DAY, 2, '含住宿与市内交通'),
+(2, 4, 'TRANSPORT', '往返高铁票（上海）', 1128.00, DATE_FORMAT(NOW() - INTERVAL 45 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 45 DAY, '%Y-%m'), '', 0, 'FP2026SH0402', 'APPROVED', 4, NOW() - INTERVAL 44 DAY, 2, '与差旅单同批，同意', NOW() - INTERVAL 43 DAY, NULL, 0, NULL),
+(3, 4, 'MEAL', '客户接待餐费', 680.50, DATE_FORMAT(NOW() - INTERVAL 12 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 12 DAY, '%Y-%m'), '', 0, 'FP2026SH0403', 'SUBMITTED', 4, NOW() - INTERVAL 10 DAY, 0, NULL, NULL, NULL, 0, '3 人工作餐'),
+(4, 4, 'OFFICE', '机械键盘与鼠标套装', 1299.00, DATE_FORMAT(NOW() - INTERVAL 5 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 5 DAY, '%Y-%m'), '', 0, NULL, 'DRAFT', 0, NULL, 0, NULL, NULL, NULL, 0, '研发工位设备，待补发票'),
+(5, 5, 'TRAVEL', '深圳行业展会出差', 7260.00, DATE_FORMAT(NOW() - INTERVAL 20 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 20 DAY, '%Y-%m'), '深圳', 6, 'FP2026SZ0501', 'SUBMITTED', 0, NOW() - INTERVAL 18 DAY, 0, NULL, NULL, NULL, 0, '含展会期间住宿'),
+(6, 5, 'MEAL', '团队建设聚餐', 356.00, DATE_FORMAT(NOW() - INTERVAL 70 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 70 DAY, '%Y-%m'), '', 0, 'FP2026TS0502', 'REJECTED', 0, NOW() - INTERVAL 69 DAY, 3, '缺少合规发票，请补充后重报', NOW() - INTERVAL 66 DAY, NULL, 0, NULL),
+(7, 3, 'TRANSPORT', '客户拜访市内交通', 268.00, DATE_FORMAT(NOW() - INTERVAL 30 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 30 DAY, '%Y-%m'), '', 0, 'FP2026BJ0301', 'APPROVED', 3, NOW() - INTERVAL 29 DAY, 2, '属实，同意', NOW() - INTERVAL 28 DAY, NULL, 0, NULL),
+(8, 3, 'OFFICE', '显示器支架 2 件', 890.00, DATE_FORMAT(NOW() - INTERVAL 30 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 30 DAY, '%Y-%m'), '', 0, 'FP2026BJ0302', 'PAID', 3, NOW() - INTERVAL 29 DAY, 2, '行政采购，同意', NOW() - INTERVAL 28 DAY, NOW() - INTERVAL 25 DAY, 2, NULL),
+(9, 2, 'TRAVEL', '杭州校园招聘宣讲差旅', 3180.00, DATE_FORMAT(NOW() - INTERVAL 12 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 12 DAY, '%Y-%m'), '杭州', 2, 'FP2026HZ0201', 'SUBMITTED', 2, NOW() - INTERVAL 11 DAY, 0, NULL, NULL, NULL, 0, '两天三场宣讲'),
+(10, 2, 'OTHER', '客户答谢伴手礼', 880.00, DATE_FORMAT(NOW() - INTERVAL 12 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 12 DAY, '%Y-%m'), '', 0, 'FP2026HZ0202', 'PAID', 2, NOW() - INTERVAL 11 DAY, 1, '市场费用，同意', NOW() - INTERVAL 10 DAY, NOW() - INTERVAL 8 DAY, 1, NULL),
+(11, 1, 'TRAVEL', '北京总部季度战略会差旅', 18600.00, DATE_FORMAT(NOW() - INTERVAL 15 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 15 DAY, '%Y-%m'), '北京', 5, 'FP2026BJ0101', 'SUBMITTED', 1, NOW() - INTERVAL 14 DAY, 0, NULL, NULL, NULL, 0, '大额差旅，须由 ADMIN/HR 审批'),
+(12, 1, 'MEAL', '总部商务宴请', 320.00, DATE_FORMAT(NOW() - INTERVAL 60 DAY, '%Y-%m-%d'), DATE_FORMAT(NOW() - INTERVAL 60 DAY, '%Y-%m'), '', 0, 'FP2026BJ0102', 'DRAFT', 0, NULL, 0, NULL, NULL, NULL, 0, '待确认陪同人数');

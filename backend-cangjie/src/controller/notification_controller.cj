@@ -22,7 +22,7 @@ import hrms_backend.service.*
 //    其中 INSERT IGNORE 不是可有可无的保险——mysql.exe 跑脚本没有 --force，
 //    一条 duplicate 报错会把同脚本后续所有语句一起中止，实测见 notifInsertSql 注释。
 
-/** 通知类型白名单：只有这 5 类，越界一律拒绝写入，避免脏 type 让前端映射不到路由。 */
+/** 通知类型白名单：只允许下面枚举到的这些类型，越界一律拒绝写入，避免脏 type 让前端映射不到路由。 */
 public func notifIsValidType(t: String): Bool {
     if (t == "CONTRACT_EXPIRING") { return true }
     if (t == "LEAVE_APPROVED") { return true }
@@ -30,6 +30,10 @@ public func notifIsValidType(t: String): Bool {
     if (t == "LEAVE_NEXT_LEVEL") { return true }
     if (t == "PAYROLL_PAID") { return true }
     if (t == "TRAINING_PUBLISHED") { return true }
+    if (t == "EXPENSE_SUBMITTED") { return true }
+    if (t == "EXPENSE_APPROVED") { return true }
+    if (t == "EXPENSE_REJECTED") { return true }
+    if (t == "EXPENSE_PAID") { return true }
     return false
 }
 
@@ -41,6 +45,12 @@ public func notifTypeLabel(t: String): String {
     if (t == "LEAVE_NEXT_LEVEL") { return "待你复核" }
     if (t == "PAYROLL_PAID") { return "工资条已发放" }
     if (t == "TRAINING_PUBLISHED") { return "培训新课上线" }
+    // P4.2 差旅与报销：四个类型都由 expense_controller 的 notifyExpense* 发出，
+    // ref_id 形如「报销单ID:状态」，靠 INSERT IGNORE + 唯一键保证同一状态只发一次。
+    if (t == "EXPENSE_SUBMITTED") { return "报销单待审批" }
+    if (t == "EXPENSE_APPROVED") { return "报销单已通过" }
+    if (t == "EXPENSE_REJECTED") { return "报销单已驳回" }
+    if (t == "EXPENSE_PAID") { return "报销款已发放" }
     return "系统通知"
 }
 

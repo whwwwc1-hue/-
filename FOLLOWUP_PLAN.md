@@ -324,6 +324,9 @@
       `rbac-menu` 四角色 `MENUS`（前端/E2E 切片见 12.17，三连全绿、**90 passed**）。
       ⚠️ 一处**后端待办**已记 12.17 ④：`PUT /trainings/:id` 不支持局部更新，只改 `status` 会被整表单校验打成 400。
 - [ ] **P4.2 差旅与报销**：`hr_expense`（`DRAFT → SUBMITTED → APPROVED → PAID`），复用审批视图风格；审批通过与月度发薪联动（报销金额进入薪资明细，注意与 P0.1 的事务边界）。
+      **进度（2026-11-28）**：后端已交付 —— 表 16 `hr_expense`(23 列) + `expense_controller.cj`(1897) + 13 条路由 + 4 个通知类型，真库 29 组实测通过，见 **12.18**。
+      ⚠️ **一处刻意偏离**：报销额**不并入薪资明细**，改走独立发放通道；理由与源码证据见 12.18 ③（`bonus` 会被 `calculateTax` 计税，实报实销不该计税）。
+      **未做**：`expense_controller_test.cj` 单测、报销 API、`ExpenseView.vue`、`meta.roles`、菜单项与 `notifRoutes`、`mock-server` 分发、`e2e/expense.spec.ts`、`rbac-menu` 四角色 `MENUS`。
 
 **验收**：两个模块各自完成「建表 → 控制器 → 路由注册 → api → 视图 → 路由 meta.roles → 菜单」七步闭环，前端可增删改查且 RBAC 生效。
 
@@ -448,6 +451,7 @@
 | 2026-11-25 | **P3.2 第二批已提交并推送 `zc`** | commit **`62a42e8`**：`10 files / 1644(+), 47(−)`；代码口径 `git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"` = **56 files / 15165(+), 147(−)**，与 13.5 表内数字一致（暂存前后各复跑一次，无漂移） | ① 按新指令兑现「每批功能推一次 zc」；② 推送前把同源残留的 **432 → 470、690 → 727、318 → 351** 三处错数改正为内联实测值，并把 ④ 的「68 tests in 8 files」标注为第一批状态（第二批为 77 / 9）；③ **推送方式变更**：local config 里的 `http.proxy=127.0.0.1:7890` 已失效（端口无监听、`ProxyEnable` 回 0），改用 `git -c http.proxy= -c https.proxy= push` **直连成功** `b4427b1..62a42e8`，详见 13.6 的状态变更块；④ 下一批立即开工 **P4.1 培训与学分** |
 | 2026-11-26 | **P4.1 培训与学分：后端 + 仓颉单测已交付（前端/E2E 未做）** | 建表 2 张（`hr_training` / `hr_training_record`）+ `training_controller.cj` **1478 行**（46 纯函数 + 11 handler）+ `main.cj` **11 条路由** + `notification_controller.cj` 接 `TRAINING_PUBLISHED` + `training_controller_test.cj` **36 类 / 93 TC / 255 AS**；逐文件与真库实测见 **12.16** | ① 按用户指令只做功能、不开安全类工作；② 单测期望值全部由 node 镜像程序化生成（12.16 ④），并借此抓到 `formatNum2` 镜像与真实实现不一致（`1.5` vs 正确 `1.50`）；③ 两处**反向结论**已记录：L1026 的嵌套双引号插值经全库扫描确认基线有 5 处先例（不改），`check_test.js` 的 `oddQuoteLines=[482]` 是脚本误报；④ 本批按 P3.2 的两段式先例**只提交后端切片**，前端与 E2E 留待下次，未跑三连与 Playwright（本批无前端改动，不影响基线 77 passed） |
 | 2026-11-28 | **P4.1 培训与学分：前端 + E2E 收口，模块闭环** | `TrainingView.vue` 844 行（4 tab + 2 弹窗）+ `hrms.ts` 144 行（6 interface / 11 Api，与 11 条路由 1:1）+ `router` `meta.roles` 四角色 + `AppLayout` 菜单与 `TRAINING_PUBLISHED` 跳转 + `mock-server` 分发 **32→43** + `e2e/training.spec.ts` **13 用例** + `rbac-menu` 四角色菜单；逐文件与契约对齐点见 **12.17** | ① 三连 exit 0、`--list` = 90 tests / 10 files、全量 **90 passed (1.7m)**，无 flake、未放宽断言；② **纠偏**：`stats`/`records` 后端实际放行 ADMIN/HR/**MANAGER**（`requireRoles` 逐个回源码核对），上一批 12.16 ⑦ 记成 ADMIN/HR 是错的，mock 已按真实角色对齐；前端 `stats` tab 刻意仍只给 ADMIN/HR（后端宽、前端窄，见 12.17 ③）；③ 抓到并绕过一个**真实后端语义坑**：`PUT` 无条件跑整表单校验，只传 `{status}` 会 400，改为回填完整 payload，并用 E2E 钉住 body 字段；④ 「未考核」用 `-1` 哨兵在 UI 上渲染成 `—` 而非 `0`；`capacityLeft` 前端现算；`blockReason` 逐字用后端原文 |
+| 2026-11-28 | **新功能批次：P4.2 差旅与报销（后端切片）** | `hr_expense` 23 列 + `expense_controller.cj` 1897 行（84 纯函数 / 13 handler）+ `main.cj` 13 条路由 + `notification_controller` 4 个 `EXPENSE_*` 类型；逐项见 **12.18** | ① **刻意偏离原计划并已记理由**：报销额**不进 `hr_payroll`**——`calculateTax` 会把 `bonus` 计入应税所得，而实报实销不该计税，并入等于算错个税并动摇 P1.3 的金额一致性闸门；改为独立发放通道（settlement 台账 + `pay`），全文件零引用 `hr_payroll`；② 真库 MySQL 8.0.43 实测 **29 组**（只读 12 + 写态 13 + 约束 4），含「局部更新不清空其余列」「乐观条件首次 1 行/二次 0 行」「驳回重报清审批痕迹」「通知 3 次写入仍 1 条」「重复票号 ERROR 1062」，测试数据已清回种子；③ 自查纠出 3 处真错：`notifInsertSql` 是单收件人不是批量、`ORDER BY CAST(SUM() AS CHAR)` 会按字符串序排错、插值里写 `\"` 无先例；④ `ERROR 1267` 已定性为**验证脚本自身的排序规则冲突**（会话变量 vs 字面量），非线上 SQL 问题；⑤ 本批同样按两段式**只提交后端**，单测与前端/E2E 留下一批 |
 
 
 ---
@@ -1348,6 +1352,76 @@ ADMIN/HR 三处（`Create:769` / `Update:816` / `Result:1193`），其余五处�
 
 ---
 
+### 12.18 P4.2 差旅与报销（后端切片，本次提交）的测量值
+
+> 本批只交付**后端**（建表 + 控制器 + 路由 + 通知接线），仓颉单测 / 前端 / mock / E2E 是下一批。
+
+**① 逐文件 `numstat`（对比 `HEAD` = `a5f78a7`）**：
+
+| 文件 | +/- | 说明 |
+| --- | --- | --- |
+| `backend-cangjie/src/controller/expense_controller.cj` | **1897 / 0**（新文件） | 100 个 `public func` = 84 纯函数 + 3 辅助 + 13 handler |
+| `backend-cangjie/src/main.cj` | 30 / 0 | 13 条路由，固定段 `my/pending/stats/settlement` 排在 `/:id` 之前 |
+| `sql/init.sql` | 54 / 1 | 表 16 `hr_expense`（L323，23 列）+ 12 条种子 + `sys_notification.type` 注释补 4 个新类型 |
+| `notification_controller.cj` | 11 / 1 | `EXPENSE_SUBMITTED/APPROVED/REJECTED/PAID` 接入 `notifIsValidType` / `notifTypeLabel` |
+| **合计** | **4 files / 1992(+), 2(−)** | |
+
+**② 状态机与闸门（本模块的业务密度都在这里，全部是可单测的纯函数）**
+`DRAFT →(submit) SUBMITTED →(approve) APPROVED →(pay) PAID`；`SUBMITTED →(reject) REJECTED →(submit) SUBMITTED`；
+`SUBMITTED →(withdraw) DRAFT`；`PAID` 终态。闸门：类别限额（TRAVEL 20000 / TRANSPORT 5000 / MEAL 2000 /
+OFFICE 10000 / OTHER 1000，未知类别直接拒）、差旅必填 city 且 days∈[1,60]（非差旅强制清零）、
+金额 >0 / 按分钳位两位小数 / ≤100000、`pay_month` 必须等于 `occur_date` 所在月、日期真实存在
+（`TIMESTAMPDIFF` 复核，非法日期 → NULL → 闸门拒）、**同员工同月票号唯一**（先 `expenseReceiptDupSql` 预检
+给友好原因，UNIQUE 兜底）、仅 DRAFT/REJECTED 可改、仅 DRAFT 可删、PUT 禁改 status、
+**MANAGER 只能审本部门且 ≤5000、>5000 必须 ADMIN/HR**、审批人 == `submit_user_id` 一律拒（自审闸门）、
+发放仅限 APPROVED 且批次月份 == 单据 `pay_month`。
+
+**③ ★ 一处刻意的范围偏离（比原计划更正确，理由已在源码注释里）**
+第六节 P4.2 原写「审批通过与月度发薪联动（报销金额进入薪资明细）」。实际**不写入 `hr_payroll`**，
+改为独立发放通道（`GET /expenses/settlement` 待发放台账 + `POST /expenses/:id/pay` 记 `paid_at/paid_by`）。
+原因是硬冲突：本项目 `calculateTax` 把 `hr_payroll.bonus` **计入应税所得**，而实报实销的报销款不是工资性收入、
+不该计税；并入会算错个税，并动摇 P1.3 已有的金额一致性 E2E 闸门（`15796.54` / `16620.26`）。
+`expense_controller.cj` 全文对 `hr_payroll` **零引用**，`handleExpenseSettlement` 上方写了完整理由注释块。
+
+**④ 真库（MySQL 8.0.43 / `hrms_db`）实测 29 组**
+只读 12 组（全筛选列表与 `COUNT` 条件一致、MANAGER 待审只回本部门、stats 四组数值序、结算台账、
+票号预检命中与排除自身、非法日期 NULL）+ 写态 13 组（草稿→局部更新**其余列不被清空**→提交乐观条件
+首次 1 行/二次 0 行→越权撤回 0 行/本人撤回 1 行→驳回后重报**审批痕迹清空**→审批→发放→
+删 PAID 返回 0 行→通知跨 3 次写入仍只 1 条→LIKE 转义→注入面→清理）+ 约束 4 组
+（NULL 票号可共存、重复票号 `ERROR 1062` 且脚本中止、`ROW_COUNT()` 佐证）。测试数据已清回 12 行种子。
+
+**⑤ 过程中的三条纠错（都改了代码，不是只记录）**
+1. `notifInsertSql` 我先按「批量 List 版」调，读源码确认真实签名是**单收件人**
+   （`notification_controller.cj:107`），改成 P4.1 同款 `notifUserIds` + 循环 + `notifJoinInserts` + 一次 `executeSql`。
+2. 三处 `ORDER BY CAST(SUM(...) AS CHAR) DESC` 会按**字符串序**排错（18600.00 vs 7260.00），改回按原始 `SUM(...)` 数值序。
+3. 删除 handler 曾在插值里写 `\"`（全库无先例），改成先取局部变量再插值。
+另：验证脚本里用会话变量与 `ref_id` 列比较会报 `ERROR 1267 Illegal mix of collations`——
+**是测试脚本自身的产物**（用户变量与列同为 IMPLICIT），控制器发的是字面量（COERCIBLE），改用字面量即通过；
+但记为已知环境差异，别误判成线上 SQL 有问题。
+
+**⑥ 语法先例抽查（我本人复跑，非采信子代理自报）**
+`var` 声明有 `main.cj:41`、`crypto_util.cj:110/141/145` 等先例；
+`expense_controller.cj:566` 的 `kw.replace("\\", "\\\\")` 与 **`response.cj:9` 逐字同款**；
+无三元 `?:`、无 `else if`、无 lambda/LINQ。三引号 SQL、`??`、`match/case Some/None` 均沿用 training 写法。
+⚠️ 本机无 SDK，以上是「先例论证」不是「编译证明」（L-CJ-1 不变）。
+
+**⑦ 本批明确未做（下一批范围）**
+`expense_controller_test.cj` 仓颉单测、`api/hrms.ts` 报销 API、`ExpenseView.vue`、`router` `meta.roles`、
+`AppLayout` 菜单项与 `notifRoutes`（`EXPENSE_*` → `/expense`）、前端 `NOTIF_TYPES` 映射、
+`mock-server` 分发（现 **43 条**）、`e2e/expense.spec.ts`、`rbac-menu.spec.ts` 四角色 `MENUS`（现 admin 10 / hr 9 / manager 7 / emp01 6）、
+三连与全量 Playwright（基线 **90 passed / 10 files**）。
+
+**⑧ 路由与角色闸门（`requireRoles` 逐行实测，前端 mock 的唯一依据）**
+
+| 路由 | 闸门 | 行号 |
+| --- | --- | --- |
+| `GET /expenses`、`/expenses/pending`、`/expenses/stats` | ADMIN/HR/MANAGER | 1220 / 1473 / 1504 |
+| `GET /expenses/settlement`、`POST /expenses/:id/pay` | ADMIN/HR | 1554 / 1844 |
+| `POST /expenses/:id/approve` | ADMIN/HR/MANAGER（内部再按部门+金额档位收口） | 1761 |
+| `POST /expenses`、`PUT/DELETE /expenses/:id`、`GET /expenses/my`、`GET /expenses/:id`、`submit`、`withdraw` | `requireAuth` | 1243 / 1319 / 1395 / 1441 / 1591 / 1640 / 1707 |
+
+---
+
 ## 十三、远端仓库现状与推送方案（2026-11-23 实测，非推测）
 
 > 本节记录**只能从远端获得**的事实。`git remote add` 与 `git fetch` 已实际执行，凭据可用
@@ -1416,7 +1490,8 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 | 我：P3.2 通知中心（**前端/测试/单测，本次提交**） | **9 files / 1571 insertions(+), 10 deletions(-)**：新增 `notification_controller_test.cj` 727/0、`e2e/notification.spec.ts` 351/0；改动 `AppLayout.vue` 147/2、`mock-server.ts` 287/2（分发 28→32）、`hrms.ts` 27/0、`ApprovalView.vue` 12/2、`PayrollView.vue` 11/1、`rbac-menu.spec.ts` 5/1、`payroll.spec.ts` 4/2。⚠️ 逐文件数字取自**暂存后**的 `git diff --cached --numstat`（`git add -A` 会把这些 LF 文件按 `core.autocrlf` 归一化，暂存前的 `git diff --numstat` 给出的是另一套数——首轮我就把 mock 记成了 331/0） |
 | 我：P4.1 培训与学分（**后端 + 仓颉单测，本次提交**） | **5 files / 2637 insertions(+), 6 deletions(-)**：新增 `training_controller.cj` 1478/0、`training_controller_test.cj` 1070/0；改动 `main.cj` 23/2、`init.sql` 64/4、`notification_controller.cj` 2/0，逐项见 12.16 |
 | 我：P4.1 培训与学分（**前端 + E2E，本次提交**） | **7 files / 2227 insertions(+), 5 deletions(-)**：新增 `TrainingView.vue` 844/0、`e2e/training.spec.ts` 457/0；改动 `mock-server.ts` 767/0、`hrms.ts` 144/0、`router/index.ts` 6/0、`AppLayout.vue` 5/1、`rbac-menu.spec.ts` 4/4，逐项与契约坑见 **12.17**。**P4.1 七步闭环至此走完** |
-| **代码累计（P4.1 前端切片暂存后实测，排除本文档）** | **60 files / 20020 insertions(+), 149 deletions(-)**（同一命令复跑）。较 P4.1 后端切片收口时的 58 files / 17798(+) / 149(−) 净增 **+2222 行 / 2 个新文件**，与本批 numstat 的 2227(+) 差 **5 行 = 本批 5 个删除行**（`rbac-menu` 4 行 + `AppLayout` 1 行改动到既有行），差值已对上、无残留未跟踪文件（命令：`git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"`） |
+| 我：P4.2 差旅与报销（**后端切片，本次提交**） | `expense_controller.cj` **1897 行 / 100 个 `public`（84 纯函数 + 13 handler + 3 辅助）** + 表 16 `hr_expense` 23 列（含同员工同月票号 UNIQUE）+ 13 条路由 + 4 个通知类型。逐文件、闸门清单、真库 29 组实测与三处纠错见 **12.18**。⚠️ **半批**：仓颉单测 / 前端 / mock / E2E 未做 |
+| **代码累计（P4.2 后端切片暂存后实测，排除本文档）** | **61 files / 22010 insertions(+), 149 deletions(-)**（命令：`git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"`）。较 P4.1 收口时的 60 files / 20020(+) / 149(−) 净增 **+1990 行 / 1 个新文件**，与本批 numstat 的 1992(+) 差 **2 行 = 本批改动到基线既有行的 2 个删除行**（`init.sql` 1 + `notification_controller.cj` 1），差值已对上 |
 | 含文档累计（`86f7b8f` 提交后实测） | 45 files / 11220 insertions(+), 147 deletions(-) |
 
 三条口径说明：
@@ -1430,11 +1505,11 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 3. 旧版本本节写过「8 files」「38 files / 8082 insertions」「约 29%」，三个数**都是当时口算的**，
    现已全部替换为 `git show --shortstat` 输出（P0 实为 11 files，不是 8）。这正是 11.2 立纪律的直接动因。
 
-⚠️ 诚实结论：按代码插入量 **17798 / 27803 ≈ 64.0%** → **20020 / 27803 ≈ 72.0%**（上一版 64.0%，增量来自 P4.1 前端 + E2E 的 +2222，见 13.5 表），
+⚠️ 诚实结论：按代码插入量 **20020 / 27803 ≈ 72.0%** → **22010 / 27803 ≈ 79.2%**（上一版 72.0%，增量来自 P4.2 后端切片的 +1990，见 13.5 表），
 **已越过用户要求的「至少匹配现有需求量」这条线**，且 P4.1 至此**不再是半批**：七步闭环走完，90 条 E2E 全绿。
-**需求 23 条里已完整交付 17 条**（P4.1 由「半条」转为「整条」；P3.2 只剩真实库账号命中路径一项受 L-NOTIF-3 限制，已在 12.15 ⑤ 兑付）。
-比值已过 70%，但**过线不等于闭环**：剩下的功能缺口是 P4.2 差旅与报销、P4.3 招聘管道深化、P4.4 绩效校准，
-以及 12.17 ④ 记下的 `PUT /trainings/:id` 局部更新待办（下一批顺带）。
+**需求 23 条里已完整交付 17 条，P4.2 半条已交付**（后端 + 真库 29 组完成，单测与前端/E2E 未落；P3.2 只剩真实库账号命中路径一项受 L-NOTIF-3 限制，已在 12.15 ⑤ 兑付）。
+比值已近 80%，但**过线不等于闭环**：P4.2 剩下的「单测 + 前端视图 + mock + E2E」是下一批的确定范围，
+连同 12.17 ④ 的 `PUT /trainings/:id` 局部更新待办（P4.2 的 `PUT /expenses/:id` 已按局部更新实现，可回补培训模块）。
 P5 的 5 份交付文档**不计入**上面的分子（口径 1）。行数仍不是目标，可验证的功能与测试才是 ——
 但用户这句话本身是可量化的，所以我不拿「质量优先」当借口回避它。
 
