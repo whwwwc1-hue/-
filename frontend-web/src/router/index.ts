@@ -70,6 +70,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '招聘管理', icon: 'Avatar', roles: ['ADMIN', 'HR'] }
       },
       {
+        path: 'training',
+        name: 'Training',
+        component: () => import('@/views/training/TrainingView.vue'),
+        meta: { title: '培训与学分', icon: 'Reading', roles: ['ADMIN', 'HR', 'MANAGER', 'EMPLOYEE'] }
+      },
+      {
         path: 'system',
         name: 'System',
         component: () => import('@/views/system/SystemView.vue'),

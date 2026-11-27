@@ -11,6 +11,7 @@
  *   - controller/request_controller.cj     → 申请、审批（含年假扣减）、撤回
  *   - controller/payroll_controller.cj     → 算薪公式（5000 起征、18.5% 社保、21.75 日薪、1.5 倍加班）
  *   - controller/dashboard_controller.cj   → overview 的 kpis/图表/到期合同结构
+ *   - controller/training_controller.cj    → 培训计划状态机、报名/签到/结课、学分折算
  *   - controller/employee_controller.cj    → 员工列表 20 字段、CSV 解析与批量导入校验
  *   - controller/notification_controller.cj → 站内通知 4 个只读/标读接口 + 3 个落库触发点
  *   - middleware/auth 守卫                  → 401/403 的状态码与文案
@@ -356,6 +357,219 @@ interface AuditSeed {
   createdAt: string
 }
 
+/** 字段名严格等于 training_controller.cj 读写的 hr_training 行。 */
+interface TrCourse {
+  id: number
+  title: string
+  category: string
+  trainer: string
+  /** 0 = 全员 */
+  deptId: number
+  startTime: string
+  endTime: string
+  /** 0 = 不限名额 */
+  capacity: number
+  credit: number
+  location: string
+  description: string
+  status: string
+}
+
+/** 一人一课一行（hr_training_record）；score = null 表示未考核，与 0 分是两种语义。 */
+interface TrRecord {
+  id: number
+  trainingId: number
+  employeeId: number
+  status: string
+  checkinAt: string
+  score: number | null
+  credit: number
+  remark: string
+}
+
+/* ------------------------------------------- 培训与学分：后端纯函数的 TS 镜像
+ *
+ * 与 training_controller.cj 同名同规则（trainingStatusLabel / trainingCreditOf /
+ * trainingCapacityLeft / trainingSignupDenied / …），后端没有的分支这里一律不加。
+ * mock 的价值就在于两端各写一遍仍然同结论，所以判定文案必须逐字一致。
+ */
+
+const TR_STATUS_LABELS: Record<string, string> = {
+  DRAFT: '草稿',
+  PUBLISHED: '已发布',
+  DONE: '已结课',
+  CANCELLED: '已取消',
+  REGISTERED: '已报名',
+  ATTENDED: '已出勤',
+  ABSENT: '已缺席'
+}
+
+const TR_CATEGORY_LABELS: Record<string, string> = {
+  INTERNAL: '内部培训',
+  EXTERNAL: '外部培训',
+  ONLINE: '线上课程',
+  COMPLIANCE: '合规必修'
+}
+
+function trStatusLabel(s: string): string {
+  return TR_STATUS_LABELS[s] ?? s
+}
+
+function trCategoryLabel(s: string): string {
+  return TR_CATEGORY_LABELS[s] ?? s
+}
+
+function trIsValidStatus(s: string): boolean {
+  return Object.prototype.hasOwnProperty.call(TR_STATUS_LABELS, s)
+}
+
+/** roundDec1：1 位小数四舍五入（学分的天然精度），与 round2 同构但保留一位。 */
+function trRound1(v: number): number {
+  const neg = v < 0
+  const r = Math.trunc(Math.abs(v) * 10 + 0.5) / 10
+  return neg ? -r : r
+}
+
+/** clampCredit：NaN → 0，负数取绝对值，上限 20，保留 1 位小数。 */
+function trClampCredit(raw: number): number {
+  if (Number.isNaN(raw)) return 0
+  const v = raw < 0 ? Math.abs(raw) : raw
+  return trRound1(v > 20 ? 20 : v)
+}
+
+/** clampCapacity：<=0 归 0（= 不限名额），上限 500。 */
+function trClampCapacity(raw: number): number {
+  if (Number.isNaN(raw) || raw <= 0) return 0
+  return raw > 500 ? 500 : Math.trunc(raw)
+}
+
+/** clampScore：-1 是「未考核」哨兵，低于 -1 或 NaN 一律压回 -1，上限 100。 */
+function trClampScore(raw: number): number {
+  if (Number.isNaN(raw) || raw < -1) return -1
+  return trRound1(raw > 100 ? 100 : raw)
+}
+
+/** 出勤 + >=80 分拿满学分，60~79.9 折半，缺席/低分 0 分。 */
+function trCreditOf(courseCredit: number, attended: boolean, score: number): number {
+  if (!attended) return 0
+  const full = trClampCredit(courseCredit)
+  if (Number.isNaN(score) || score < 0) return full
+  const s = trClampScore(score)
+  if (s >= 80) return full
+  if (s >= 60) return trRound1(full * 0.5)
+  return 0
+}
+
+/** 剩余名额：capacity<=0 返回 -1（不限），否则夹在 [0, capacity]。 */
+function trCapacityLeft(capacity: number, signed: number): number {
+  if (capacity <= 0) return -1
+  const left = capacity - signed
+  return left < 0 ? 0 : left
+}
+
+function trSignupDenied(status: string, minToStart: number, left: number): string {
+  if (status !== 'PUBLISHED') return '该培训当前不可报名'
+  if (minToStart <= 0) return '该培训已开课或已结束，不能报名'
+  if (left === 0) return '该培训名额已满，如需加位请联系 HR'
+  return ''
+}
+
+/** 自助签到时窗：开课前 30 分钟 ~ 结课后 60 分钟。 */
+function trCheckinDenied(minToStart: number, minSinceEnd: number): string {
+  if (minToStart > 30) return '未到签到时间，开课前 30 分钟内才可签到'
+  if (minSinceEnd > 60) return '签到已截止（结课后 60 分钟）'
+  return ''
+}
+
+function trUnsignupDenied(myStatus: string, minToStart: number): string {
+  if (myStatus !== 'REGISTERED') return '只有「已报名」状态可以取消'
+  if (minToStart <= 0) return '已开课或已结束，不能取消报名，请联系 HR'
+  return ''
+}
+
+function trResultDenied(status: string): string {
+  if (status === 'DRAFT') return '草稿状态的计划没有学员，不能录入结果'
+  if (status === 'CANCELLED') return '已取消的培训不能录入结果'
+  return ''
+}
+
+function trAudienceDenied(courseDeptId: number, empDeptId: number): string {
+  if (courseDeptId <= 0) return ''
+  if (courseDeptId === empDeptId) return ''
+  return '该培训面向其他部门，你不在受众范围内'
+}
+
+/** 状态机：DRAFT→PUBLISHED/CANCELLED，PUBLISHED→DONE/CANCELLED，终态不再变更。 */
+function trTransitionAllowed(from: string, to: string): boolean {
+  if (!trIsValidStatus(from) || !trIsValidStatus(to)) return false
+  if (from === to) return false
+  if (from === 'DRAFT') return to === 'PUBLISHED' || to === 'CANCELLED'
+  if (from === 'PUBLISHED') return to === 'DONE' || to === 'CANCELLED'
+  return false
+}
+
+function trTransitionDenied(from: string, to: string): string {
+  if (from === to) return `该培训计划已是「${trStatusLabel(from)}」状态`
+  if (from === 'DONE' || from === 'CANCELLED') return `「${trStatusLabel(from)}」为终态，不能再变更`
+  return `不支持的状态流转：${trStatusLabel(from)} → ${trStatusLabel(to)}`
+}
+
+/** 表单必填/长度校验（培训主题 120 字、讲师 64 字），空串 = 通过。 */
+function trValidateForm(title: string, trainer: string, startAt: string, endAt: string): string {
+  if (title === '') return '培训主题必填'
+  if ([...title].length > 120) return '培训主题不超过 120 字'
+  if (trainer === '') return '讲师必填'
+  if ([...trainer].length > 64) return '讲师姓名不超过 64 字'
+  if (startAt === '') return '开课时间必填'
+  if (endAt === '') return '结课时间必填'
+  if (!trTimeFormatOk(startAt)) return '开课时间格式须为 YYYY-MM-DD HH:MM:SS'
+  if (!trTimeFormatOk(endAt)) return '结课时间格式须为 YYYY-MM-DD HH:MM:SS'
+  return ''
+}
+
+function trTimeFormatOk(v: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/.test(v)
+}
+
+/** 严格解析 `YYYY-MM-DD HH:mm:ss`（越界月份/日期返回 NaN，不让 Date 悄悄进位）。 */
+function trToMs(v: string): number {
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/)
+  if (!m) return NaN
+  const [, y, mo, d, h = '0', mi = '0', s = '0'] = m
+  const month = Number(mo)
+  const day = Number(d)
+  if (month < 1 || month > 12 || day < 1 || day > 31) return NaN
+  if (Number(h) > 23 || Number(mi) > 59 || Number(s) > 59) return NaN
+  return new Date(Number(y), month - 1, day, Number(h), Number(mi), Number(s)).getTime()
+}
+
+/** 距开课分钟数（与训练后端的 TIMESTAMPDIFF(NOW, start_time) 同向：未来为正）。 */
+function trMinToStart(startTime: string): number {
+  const ms = trToMs(startTime)
+  if (Number.isNaN(ms)) return 0
+  return Math.trunc((ms - Date.now()) / 60000)
+}
+
+/** 距结课分钟数（已过为正，未到期为负）。 */
+function trMinSinceEnd(endTime: string): number {
+  const ms = trToMs(endTime)
+  if (Number.isNaN(ms)) return 0
+  return Math.trunc((Date.now() - ms) / 60000)
+}
+
+/** 课程时长（分钟），对应 SQL 里的 TIMESTAMPDIFF(MINUTE, start_time, end_time)。 */
+function trDurationMinutes(t: TrCourse): number {
+  const s = trToMs(t.startTime)
+  const e = trToMs(t.endTime)
+  if (Number.isNaN(s) || Number.isNaN(e)) return 0
+  return Math.trunc((e - s) / 60000)
+}
+
+/** 培训种子时间：与 init.sql 用 NOW() 相对取时的口径一致，偏移 n 天的整点。 */
+function trStamp(offsetDays: number, hour: number): string {
+  return `${localDate(offsetDays)} ${pad(hour)}:00:00`
+}
+
 type Json = Record<string, unknown>
 
 interface Call {
@@ -375,11 +589,32 @@ interface Reply {
   headers?: Record<string, string>
 }
 
+/**
+ * 一条被 mock 认领的请求快照，供 spec 断言「前端到底发了什么」。
+ *
+ * 光断言 UI 文案不足以钉住契约：PUT 只传 {status} 也能让行变绿，但后端表单校验会 400；
+ * 报名后的「剩余名额」到底是服务端算的还是前端本地减的，页面上看不出来。
+ * 这里记录的是**浏览器真实发出的报文**（path 保留 /api/v1 前缀）加上 mock 回的状态码。
+ */
+export interface MockRequest {
+  method: string
+  path: string
+  query: URLSearchParams
+  body: Json
+  status: number
+  /** 统一信封里的 data：写操作的状态机回执只能从这里读（如 signup 的 capacityLeft）。 */
+  data: Json
+}
+
 /* ------------------------------------------------------------------ mock */
 
 export class MockBackend {
   /** 未被任何 handler 认领的请求，用例结束时必须为空。 */
   readonly unmatched: string[] = []
+  /** 请求日志（append-only，按发生顺序）。读它请用 waitForCall()，别直接下标取。 */
+  readonly calls: MockRequest[] = []
+  /** 下一个还没被 waitForCall 领走的日志下标，见 waitForCall 的注释。 */
+  private callCursor = 0
 
   private readonly tokens = new Map<string, string>()
   private readonly failures = new Map<string, number>()
@@ -393,6 +628,14 @@ export class MockBackend {
   /** P3.2 站内通知；真实库有 UNIQUE(user_id, type, ref_id)，这里用 notifPush 的查重兜住。 */
   private readonly notifications: NotifRow[] = []
   private readonly performances: PerfRow[] = []
+  /**
+   * 培训与学分（P4.1）：课程 + 报名记录逐行取自 sql/init.sql 的种子，
+   * 时间偏移相对 NOW() 生成（init.sql 本身就用 NOW() ± n 天，固定日期跑两天就失真）。
+   */
+  private readonly trainings: TrCourse[] = []
+  private readonly trainingRecords: TrRecord[] = []
+  /** 见 fillTrainingSeats()：只抬 signedCount 的假报名数，不产生名册行。 */
+  private readonly trainingExtraSigned = new Map<number, number>()
   /** 部门 / 岗位种子逐行取自 sql/init.sql 的 hr_department、hr_position（在职人数不写死，由 employees 现算）。 */
   private readonly departments: DeptSeed[] = [
     { id: 1, parentId: 0, deptName: '总经办', leaderName: '张明远', headcountLimit: 5, description: '公司战略决策与经营管理' },
@@ -443,6 +686,7 @@ export class MockBackend {
     this.seedPerformances()
     this.seedRequests()
     this.seedAttendance()
+    this.seedTrainings()
   }
 
   /* -------------------------------------------------------------- 种子数据 */
@@ -595,6 +839,36 @@ export class MockBackend {
     this.unmatched.length = 0
     this.renewToken = null
     this.notifications.length = 0
+    this.calls.length = 0
+    this.callCursor = 0
+  }
+
+  /**
+   * 等到下一条**还没被领走**的 `method + path` 请求，返回报文快照。
+   *
+   * 为什么要游标而不是 find()：同一个接口一屏之内往往打多次（首屏加载、点「查询」、
+   * 写操作成功后重拉）。直接 find 第一条会永远拿回首屏那次，测试就会「断言了 A 请求、
+   * 实际验的是 B」。用法：先 await 掉首屏那条，再把下一次 waitForCall 的 promise
+   * 建在点击之前，点完 await —— 这样既不 races，也不会串位。
+   *
+   * 日志在 dispatch 里产生，所以只有挂了 route（即 `!REAL_BACKEND`）才有内容；
+   * 真实后端模式下没有任何记录，waitForCall 必定超时——依赖它的用例要显式 skip。
+   */
+  async waitForCall(method: string, path: string, timeoutMs = 10000): Promise<MockRequest> {
+    const started = Date.now()
+    for (;;) {
+      const idx = this.calls.findIndex((c, i) => i >= this.callCursor && c.method === method && c.path === path)
+      if (idx >= 0) {
+        const hit = this.calls[idx]
+        this.callCursor = idx + 1
+        return hit
+      }
+      if (Date.now() - started >= timeoutMs) {
+        const seen = this.calls.map((c) => `${c.method} ${c.path}`).join('\n')
+        throw new Error(`mock: ${timeoutMs}ms 内没等到 ${method} ${path}\n已记录的请求：\n${seen || '(空)'}`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, 40))
+    }
   }
 
   /* ------------------------------------------------------ P3.2 站内通知 */
@@ -931,6 +1205,16 @@ export class MockBackend {
       this.reply(route, { status: 404, body: envelope(404, `mock 未实现的接口：${method} ${path}`, null) })
       return
     }
+    // 日志记的是原始 pathname（带 /api/v1），spec 里写的断言就是前端 axios baseURL 拼出来的那个串
+    const data = hit.body.data
+    this.calls.push({
+      method,
+      path: url.pathname,
+      query: url.searchParams,
+      body,
+      status: hit.status,
+      data: data && typeof data === 'object' && !Array.isArray(data) ? (data as Json) : {}
+    })
     this.reply(route, hit)
   }
 
@@ -1002,6 +1286,20 @@ export class MockBackend {
     if (method === 'GET' && path === '/employees') return this.needRoles(call, ['ADMIN', 'HR', 'MANAGER'], () => this.onEmployeeList(call))
     // 精确路径必须排在 /employees/{id} 之类的正则之前，否则 import 会被当成 id 解析
     if (method === 'POST' && path === '/employees/import') return this.needRoles(call, ['ADMIN', 'HR'], () => this.onEmployeeImport(call))
+
+    /* ---------- 培训与学分（P4.1，契约见 training_controller.cj） ---------- */
+    // 固定路径必须排在 /^\/trainings\/(\d+)$/ 之前，否则 available / my / stats 会被当成 id 解析
+    if (method === 'GET' && path === '/trainings/available') return this.needAuth(call, () => this.onTrainingAvailable(call))
+    if (method === 'GET' && path === '/trainings/my') return this.needAuth(call, () => this.onTrainingMy(call))
+    if (method === 'GET' && path === '/trainings/stats') return this.needRoles(call, ['ADMIN', 'HR', 'MANAGER'], () => this.onTrainingStats())
+    if (method === 'GET' && path === '/trainings') return this.needRoles(call, ['ADMIN', 'HR', 'MANAGER'], () => this.onTrainingList(call))
+    if (method === 'POST' && path === '/trainings') return this.needRoles(call, ['ADMIN', 'HR'], () => this.onTrainingCreate(call))
+    if (method === 'POST' && (m = path.match(/^\/trainings\/(\d+)\/signup$/))) return this.needAuth(call, () => this.onTrainingSignup(call, Number((m as RegExpMatchArray)[1])))
+    if (method === 'DELETE' && (m = path.match(/^\/trainings\/(\d+)\/signup$/))) return this.needAuth(call, () => this.onTrainingUnsignup(call, Number((m as RegExpMatchArray)[1])))
+    if (method === 'POST' && (m = path.match(/^\/trainings\/(\d+)\/checkin$/))) return this.needAuth(call, () => this.onTrainingCheckin(call, Number((m as RegExpMatchArray)[1])))
+    if (method === 'GET' && (m = path.match(/^\/trainings\/(\d+)\/records$/))) return this.needRoles(call, ['ADMIN', 'HR', 'MANAGER'], () => this.onTrainingRoster(call, Number((m as RegExpMatchArray)[1])))
+    if (method === 'POST' && (m = path.match(/^\/trainings\/(\d+)\/records$/))) return this.needRoles(call, ['ADMIN', 'HR'], () => this.onTrainingResult(call, Number((m as RegExpMatchArray)[1])))
+    if (method === 'PUT' && (m = path.match(/^\/trainings\/(\d+)$/))) return this.needRoles(call, ['ADMIN', 'HR'], () => this.onTrainingUpdate(call, Number((m as RegExpMatchArray)[1])))
 
     return null
   }
@@ -2038,6 +2336,475 @@ export class MockBackend {
     rows.sort((a, b) => b.id - a.id)
     const total = rows.length
     return ok(pageData(rows.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize))
+  }
+
+  /* -------------------------------------------------------------- 培训与学分
+   *
+   * 镜像 training_controller.cj 的 11 个接口：4 门课 + 3 条报名记录逐行取自
+   * sql/init.sql 的 P4.1 种子（时间按 NOW() ± n 天偏移，与 SQL 同口径），
+   * 名额/时窗/受众/学分折算/状态机的判定全部走文件顶部那批同名纯函数。
+   *
+   * 写操作都带真实状态机语义，而不是「回个假 id 就完事」：
+   *   POST signup   → 落一行 REGISTERED 并占名额，该行的 myStatus/canSignup/canUnsignup 随之翻转
+   *   DELETE signup → 同一行转 CANCELLED（库里 UNIQUE(training_id, employee_id) 不允许插新行），释放名额
+   *   POST checkin  → REGISTERED → ATTENDED 并盖签到时间，越窗返回 400 原文
+   *   PUT           → 状态机 + 结课结算（未签到的报名行转 ABSENT）
+   *   POST records  → 按 attended/score 折算学分（>=80 满分、60~79.9 折半、缺席 0）
+   * 于是用例可以断「这一行变成了什么」，而不只是「这个按钮存在」。
+   *
+   * 有意不实现：发布时给受众推「培训新课上线」站内信（notifyTrainingPublished）。
+   * 那是通知模块的落库链路，且会让铃铛角标随发布变动，反而更难断言。
+   * -------------------------------------------------------------- */
+
+  private seedTrainings(): void {
+    this.trainings.push(
+      { id: 1, title: '仓颉语言工程实践：从并发到数据访问层', category: 'INTERNAL', trainer: '李泽宇', deptId: 2, startTime: trStamp(3, 10), endTime: trStamp(3, 15), capacity: 30, credit: 2.0, location: '总部 3F 路演厅', description: '面向研发的仓颉实操课，覆盖协程、并发模型与 MySQL 数据访问层加固。', status: 'PUBLISHED' },
+      { id: 2, title: '信息安全与合规必修（年度）', category: 'COMPLIANCE', trainer: '外部讲师 · 安永', deptId: 0, startTime: trStamp(7, 10), endTime: trStamp(7, 12), capacity: 0, credit: 1.0, location: '线上直播', description: '全员必修，未获得学分将影响年度绩效评级。', status: 'PUBLISHED' },
+      { id: 3, title: '高效绩效面谈技巧', category: 'ONLINE', trainer: '王静', deptId: 3, startTime: trStamp(-10, 10), endTime: trStamp(-10, 12), capacity: 20, credit: 1.5, location: '飞书会议室', description: '面向 HRBP 与部门主管的面谈方法论，含录像回放。', status: 'DONE' },
+      { id: 4, title: '新员工入职引导（草稿）', category: 'INTERNAL', trainer: '王静', deptId: 0, startTime: trStamp(15, 10), endTime: trStamp(15, 13), capacity: 50, credit: 1.0, location: '总部 2F 培训室', description: '草稿状态，尚未发布，员工端不可见。', status: 'DRAFT' }
+    )
+    // 第 3 课（已结课）的成绩与学分：88 分全额学分、55 分不合格零学分、缺席行 score 为 NULL。
+    this.trainingRecords.push(
+      { id: 1, trainingId: 3, employeeId: 2, status: 'ATTENDED', checkinAt: trStamp(-10, 10), score: 88.0, credit: 1.5, remark: '' },
+      { id: 2, trainingId: 3, employeeId: 4, status: 'ATTENDED', checkinAt: trStamp(-10, 10), score: 55.0, credit: 0.0, remark: '补考安排在下季度' },
+      { id: 3, trainingId: 3, employeeId: 5, status: 'ABSENT', checkinAt: '', score: null, credit: 0.0, remark: '入职当周未参加' }
+    )
+  }
+
+  /** 测试后门：把某门课的报名数抬到 N（模拟别的同事先把名额抢完）。 */
+  fillTrainingSeats(trainingId: number, signedCount: number): void {
+    const real = this.trainingRecords.filter((r) => r.trainingId === trainingId && r.status !== 'CANCELLED').length
+    this.trainingExtraSigned.set(trainingId, Math.max(0, signedCount - real))
+  }
+
+  /** 已报名数 = 未取消的报名行 + 后门抬上去的假报名数（后者不产生名册行）。 */
+  private trSigned(trainingId: number): number {
+    const real = this.trainingRecords.filter((r) => r.trainingId === trainingId && r.status !== 'CANCELLED').length
+    return real + (this.trainingExtraSigned.get(trainingId) ?? 0)
+  }
+
+  private trAttended(trainingId: number): number {
+    return this.trainingRecords.filter((r) => r.trainingId === trainingId && r.status === 'ATTENDED').length
+  }
+
+  /** trainingPlanSql / trainingAvailableSql 用的是 IFNULL(d.dept_name, '全员')：dept_id=0 没有部门行。 */
+  private trDeptName(deptId: number): string {
+    if (deptId <= 0) return '全员'
+    return this.departments.find((d) => d.id === deptId)?.deptName ?? '全员'
+  }
+
+  private trRecord(trainingId: number, employeeId: number): TrRecord | undefined {
+    return this.trainingRecords.find((r) => r.trainingId === trainingId && r.employeeId === employeeId)
+  }
+
+  /** handleTrainingList：status/category/keyword/deptId 四路筛选 + ORDER BY start_time DESC, id DESC。 */
+  private onTrainingList(call: Call): Reply {
+    const status = (call.query.get('status') || '').trim()
+    const category = (call.query.get('category') || '').trim()
+    const keyword = (call.query.get('keyword') || '').trim()
+    const deptId = Number(call.query.get('deptId') || 0) || 0
+    let rows = [...this.trainings]
+    // 后端 handleTrainingList 对 MANAGER 强制换成 trainingVisibleCond(getUserDeptId(u))：
+    // 数据范围在服务端收敛为「本部门课 + 全员课」，没绑员工档案时退化为只看全员课。
+    // 这条刻意写在服务端（源码注释：前端把 deptId 改成别的部门就绕过去了），mock 必须照抄。
+    const account = call.account as Account
+    if (account.role === 'MANAGER') {
+      const mine = account.employeeId > 0 ? this.employee(account.employeeId).deptId : 0
+      rows = rows.filter((r) => r.deptId === 0 || r.deptId === mine)
+    }
+    if (status) rows = rows.filter((r) => r.status === status)
+    if (category) rows = rows.filter((r) => r.category === category)
+    if (keyword) rows = rows.filter((r) => r.title.includes(keyword) || r.trainer.includes(keyword) || r.location.includes(keyword))
+    if (deptId > 0) rows = rows.filter((r) => r.deptId === deptId)
+    rows.sort((a, b) => b.startTime.localeCompare(a.startTime) || b.id - a.id)
+    return ok(rows.map((t) => this.trPlanJson(t)))
+  }
+
+  /** trainingPlanRowToJson 的 17 个字段。 */
+  private trPlanJson(t: TrCourse): Json {
+    return {
+      id: t.id,
+      title: t.title,
+      category: t.category,
+      categoryLabel: trCategoryLabel(t.category),
+      trainer: t.trainer,
+      deptId: t.deptId,
+      deptName: this.trDeptName(t.deptId),
+      startTime: t.startTime,
+      endTime: t.endTime,
+      capacity: t.capacity,
+      credit: t.credit,
+      location: t.location,
+      description: t.description,
+      status: t.status,
+      statusLabel: trStatusLabel(t.status),
+      signedCount: this.trSigned(t.id),
+      attendedCount: this.trAttended(t.id)
+    }
+  }
+
+  /** handleTrainingCreate：只建草稿（发布走 PUT，状态机只有一处入口）。 */
+  private onTrainingCreate(call: Call): Reply {
+    const title = String(call.body.title ?? '').trim()
+    const trainer = String(call.body.trainer ?? '').trim()
+    const startTime = String(call.body.startTime ?? '').trim()
+    const endTime = String(call.body.endTime ?? '').trim()
+    const bad = trValidateForm(title, trainer, startTime, endTime)
+    if (bad) return err(400, bad)
+    const s = trToMs(startTime)
+    const e = trToMs(endTime)
+    if (Number.isNaN(s) || Number.isNaN(e) || e <= s) return err(400, '开课/结课时间不是有效日期，或结课未晚于开课')
+    const course: TrCourse = {
+      id: this.nextId(),
+      title,
+      category: String(call.body.category ?? 'INTERNAL').trim() || 'INTERNAL',
+      trainer,
+      deptId: Number(call.body.deptId ?? 0) || 0,
+      startTime,
+      endTime,
+      capacity: trClampCapacity(Number(call.body.capacity ?? 0)),
+      credit: trClampCredit(Number(call.body.credit ?? 1)),
+      location: String(call.body.location ?? '').trim().slice(0, 120),
+      description: String(call.body.description ?? '').trim().slice(0, 500),
+      status: 'DRAFT'
+    }
+    this.trainings.push(course)
+    return ok({ id: course.id, status: 'DRAFT' })
+  }
+
+  /** handleTrainingUpdate：表单校验 → 状态机 → 内容落库 →（结课时）学分结算。 */
+  private onTrainingUpdate(call: Call, id: number): Reply {
+    const course = this.trainings.find((c) => c.id === id)
+    if (!course) return err(404, '培训计划不存在')
+    const title = String(call.body.title ?? '').trim()
+    const trainer = String(call.body.trainer ?? '').trim()
+    const startTime = String(call.body.startTime ?? '').trim()
+    const endTime = String(call.body.endTime ?? '').trim()
+    // 这条校验顺带钉住前端的一个坑：PUT 只传 {status} 会被「培训主题必填」挡下，
+    // 所以视图的状态流转必须回填完整 payload（training.spec.ts 断言 body 里 title 非空）。
+    const bad = trValidateForm(title, trainer, startTime, endTime)
+    if (bad) return err(400, bad)
+    const s = trToMs(startTime)
+    const e = trToMs(endTime)
+    if (Number.isNaN(s) || Number.isNaN(e) || e <= s) return err(400, '开课/结课时间不是有效日期，或结课未晚于开课')
+    const next = String(call.body.status ?? '').trim() || course.status
+    if (!trIsValidStatus(next)) return err(400, `不支持的状态流转：${trStatusLabel(course.status)} → ${next}`)
+    if (next !== course.status) {
+      if (!trTransitionAllowed(course.status, next)) return err(400, trTransitionDenied(course.status, next))
+      if (next === 'PUBLISHED' && trMinToStart(startTime) <= 0) return err(400, '开课时间已过，无法发布，请先调整时间')
+      if (this.trSigned(id) > 0 && trMinToStart(startTime) <= 0) return err(400, '已有学员报名，不能把开课时间改到过去')
+    }
+    const credit = trClampCredit(Number(call.body.credit ?? course.credit))
+    if (credit !== course.credit && this.trAttended(id) > 0) return err(400, '已有出勤记录，学分不能再修改')
+    course.title = title
+    course.trainer = trainer
+    course.startTime = startTime
+    course.endTime = endTime
+    course.category = String(call.body.category ?? course.category).trim() || course.category
+    course.deptId = Number(call.body.deptId ?? course.deptId) || 0
+    course.capacity = trClampCapacity(Number(call.body.capacity ?? course.capacity))
+    course.credit = credit
+    course.location = String(call.body.location ?? course.location).trim().slice(0, 120)
+    course.description = String(call.body.description ?? course.description).trim().slice(0, 500)
+    if (next === 'DONE') {
+      // 结课结算：到点仍未签到的报名行转缺席，已签到未录分的补满学分
+      for (const r of this.trainingRecords) {
+        if (r.trainingId !== id) continue
+        if (r.status === 'REGISTERED') {
+          r.status = 'ABSENT'
+          if (!r.remark) r.remark = '结课时未签到'
+        } else if (r.status === 'ATTENDED' && r.score === null) {
+          r.credit = course.credit
+        }
+      }
+    }
+    course.status = next
+    return ok({ id: course.id, status: course.status, statusLabel: trStatusLabel(course.status) })
+  }
+
+  /** handleTrainingAvailable：只列已发布且受众命中本部门的课，附我的报名态与三重可操作标记。 */
+  private onTrainingAvailable(call: Call): Reply {
+    const account = call.account as Account
+    if (account.employeeId <= 0) return err(403, '当前账号未关联员工档案，无法报名培训')
+    const emp = this.employee(account.employeeId)
+    const rows = this.trainings
+      .filter((t) => t.status === 'PUBLISHED' && (t.deptId === 0 || t.deptId === emp.deptId))
+      .sort((a, b) => a.startTime.localeCompare(b.startTime) || a.id - b.id)
+    return ok({ list: rows.map((t) => this.trOfferJson(t, emp.id)), summary: this.trSummary(emp.id) })
+  }
+
+  /** trainingOfferRowToJson 的 22 个字段（blockReason 是后端原文，前端直接展示）。 */
+  private trOfferJson(t: TrCourse, empId: number): Json {
+    const signed = this.trSigned(t.id)
+    const left = trCapacityLeft(t.capacity, signed)
+    const minToStart = trMinToStart(t.startTime)
+    const minSinceEnd = trMinSinceEnd(t.endTime)
+    const rec = this.trRecord(t.id, empId)
+    const myStatus = rec ? rec.status : ''
+    const signupDeny = trSignupDenied(t.status, minToStart, left)
+    const checkinDeny = trCheckinDenied(minToStart, minSinceEnd)
+    let blockReason = '你已缺席该培训'
+    if (myStatus === '') blockReason = signupDeny
+    if (myStatus === 'REGISTERED') blockReason = '你已报名该培训'
+    if (myStatus === 'ATTENDED') blockReason = '你已签到该培训'
+    return {
+      id: t.id,
+      title: t.title,
+      category: t.category,
+      categoryLabel: trCategoryLabel(t.category),
+      trainer: t.trainer,
+      deptName: this.trDeptName(t.deptId),
+      startTime: t.startTime,
+      endTime: t.endTime,
+      capacity: t.capacity,
+      credit: t.credit,
+      location: t.location,
+      status: t.status,
+      statusLabel: trStatusLabel(t.status),
+      minToStart,
+      minSinceEnd,
+      myStatus,
+      myStatusLabel: myStatus === '' ? '未报名' : trStatusLabel(myStatus),
+      signedCount: signed,
+      capacityLeft: left,
+      canSignup: (myStatus === '' || myStatus === 'CANCELLED' || myStatus === 'ABSENT') && signupDeny === '',
+      canCheckin: myStatus === 'REGISTERED' && checkinDeny === '',
+      canUnsignup: myStatus === 'REGISTERED' && minToStart > 0,
+      blockReason,
+      checkinAt: rec ? rec.checkinAt : ''
+    }
+  }
+
+  /** handleTrainingMy：我的报名明细（含已取消行，状态列自解释）+ 4 项汇总。 */
+  private onTrainingMy(call: Call): Reply {
+    const account = call.account as Account
+    if (account.employeeId <= 0) return err(403, '当前账号未关联员工档案，无法查看培训')
+    const emp = this.employee(account.employeeId)
+    const pairs = this.trainingRecords
+      .filter((r) => r.employeeId === emp.id)
+      .map((r) => ({ rec: r, course: this.trainings.find((c) => c.id === r.trainingId) }))
+      .filter((x): x is { rec: TrRecord; course: TrCourse } => !!x.course)
+      .sort((a, b) => b.course.startTime.localeCompare(a.course.startTime) || b.rec.id - a.rec.id)
+    const summary = this.trSummary(emp.id)
+    return ok({
+      list: pairs.map(({ rec, course }) => ({
+        id: rec.id,
+        trainingId: course.id,
+        title: course.title,
+        category: course.category,
+        categoryLabel: trCategoryLabel(course.category),
+        trainer: course.trainer,
+        startTime: course.startTime,
+        endTime: course.endTime,
+        courseCredit: course.credit,
+        status: rec.status,
+        statusLabel: trStatusLabel(rec.status),
+        checkinAt: rec.checkinAt,
+        score: rec.score,
+        credit: rec.credit,
+        remark: rec.remark
+      })),
+      totalCredit: summary.credit,
+      enrolledCount: summary.enrolled,
+      attendedCount: summary.attended,
+      totalHours: summary.hours
+    })
+  }
+
+  /** trainingMySummarySql 的 4 列：获得学分 / 报名数 / 出勤数 / 出勤学时（分钟 → 小时）。 */
+  private trSummary(empId: number): { credit: number; enrolled: number; attended: number; hours: number } {
+    const mine = this.trainingRecords.filter((r) => r.employeeId === empId && r.status !== 'CANCELLED')
+    let credit = 0
+    let attended = 0
+    let minutes = 0
+    for (const r of mine) {
+      credit += r.credit
+      if (r.status === 'ATTENDED') {
+        attended += 1
+        const course = this.trainings.find((c) => c.id === r.trainingId)
+        if (course) minutes += trDurationMinutes(course)
+      }
+    }
+    return { credit: trRound1(credit), enrolled: mine.length, attended, hours: Math.round((minutes / 60) * 100) / 100 }
+  }
+
+  /** handleTrainingStats：概览 + 学分排行（前 10）+ 课程维度统计。 */
+  private onTrainingStats(): Reply {
+    const count = (s: string) => this.trainings.filter((t) => t.status === s).length
+    let minutes = 0
+    for (const t of this.trainings) {
+      if (t.status === 'PUBLISHED' || t.status === 'DONE') minutes += trDurationMinutes(t)
+    }
+    const scored = this.trainingRecords.filter((r) => r.score !== null)
+    const avgScore = scored.length === 0 ? 0 : Math.round((scored.reduce((a, r) => a + (r.score as number), 0) / scored.length) * 100) / 100
+    const covered = new Set(this.trainingRecords.filter((r) => r.status === 'ATTENDED' || r.status === 'REGISTERED').map((r) => r.employeeId)).size
+    return ok({
+      overview: {
+        total: this.trainings.length,
+        published: count('PUBLISHED'),
+        done: count('DONE'),
+        draft: count('DRAFT'),
+        cancelled: count('CANCELLED'),
+        totalHours: Math.round((minutes / 60) * 100) / 100,
+        avgScore,
+        coveredEmployees: covered
+      },
+      creditRank: this.trCreditRank(),
+      courseStats: this.trCourseStats()
+    })
+  }
+
+  /** 学分排行：按员工聚合未取消的报名行，ORDER BY SUM(credit) DESC, e.id ASC LIMIT 10。 */
+  private trCreditRank(): Json[] {
+    const byEmp = new Map<number, number>()
+    for (const r of this.trainingRecords) {
+      if (r.status === 'CANCELLED') continue
+      byEmp.set(r.employeeId, (byEmp.get(r.employeeId) ?? 0) + r.credit)
+    }
+    return [...byEmp.entries()]
+      .map(([employeeId, credit]) => {
+        const e = this.employees.find((x) => x.id === employeeId)
+        return { employeeId, name: e?.name ?? '', deptName: e?.deptName ?? '', credit: trRound1(credit) }
+      })
+      .sort((a, b) => (b.credit as number) - (a.credit as number) || (a.employeeId as number) - (b.employeeId as number))
+      .slice(0, 10)
+  }
+
+  /** 课程维度统计：报名/出勤/平均分/学分合计，按学分合计降序。 */
+  private trCourseStats(): Json[] {
+    const rows: Json[] = []
+    for (const t of this.trainings) {
+      const recs = this.trainingRecords.filter((r) => r.trainingId === t.id)
+      if (recs.length === 0) continue
+      const scored = recs.filter((r) => r.score !== null)
+      rows.push({
+        trainingId: t.id,
+        title: t.title,
+        avgScore: scored.length === 0 ? null : Math.round((scored.reduce((a, r) => a + (r.score as number), 0) / scored.length) * 100) / 100,
+        signedCount: recs.filter((r) => r.status !== 'CANCELLED').length,
+        attendedCount: recs.filter((r) => r.status === 'ATTENDED').length,
+        creditTotal: trRound1(recs.reduce((a, r) => a + r.credit, 0))
+      })
+    }
+    return rows.sort((a, b) => (b.creditTotal as number) - (a.creditTotal as number) || (a.trainingId as number) - (b.trainingId as number))
+  }
+
+  /** handleTrainingRoster：ORDER BY FIELD(status,'REGISTERED','ATTENDED','ABSENT','CANCELLED'), id ASC。 */
+  private onTrainingRoster(call: Call, id: number): Reply {
+    const course = this.trainings.find((c) => c.id === id)
+    if (!course) return err(404, '培训计划不存在')
+    const order = ['REGISTERED', 'ATTENDED', 'ABSENT', 'CANCELLED']
+    const rows = this.trainingRecords
+      .filter((r) => r.trainingId === id)
+      .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || a.id - b.id)
+    return ok({
+      trainingId: course.id,
+      title: course.title,
+      status: course.status,
+      list: rows.map((r) => {
+        const e = this.employee(r.employeeId)
+        return {
+          id: r.id,
+          employeeId: e.id,
+          name: e.name,
+          empNo: e.empNo,
+          deptName: e.deptName,
+          status: r.status,
+          statusLabel: trStatusLabel(r.status),
+          checkinAt: r.checkinAt,
+          score: r.score,
+          credit: r.credit,
+          remark: r.remark,
+          userId: this.accounts.find((a) => a.employeeId === e.id)?.userId ?? 0
+        }
+      })
+    })
+  }
+
+  /** handleTrainingResult：录入出勤与考核分，系统按课程学分折算。 */
+  private onTrainingResult(call: Call, id: number): Reply {
+    const course = this.trainings.find((c) => c.id === id)
+    if (!course) return err(404, '培训计划不存在')
+    const deny = trResultDenied(course.status)
+    if (deny) return err(400, deny)
+    const employeeId = Number(call.body.employeeId ?? 0) || 0
+    if (employeeId <= 0) return err(400, '员工ID必填')
+    const attended = call.body.attended !== false
+    const score = trClampScore(Number(call.body.score ?? -1))
+    const remark = String(call.body.remark ?? '').trim().slice(0, 255)
+    const rec = this.trRecord(id, employeeId)
+    if (!rec) return err(404, '该员工未报名此培训')
+    if (rec.status === 'CANCELLED') return err(400, '该员工已取消报名，不能录入结果')
+    const gained = trCreditOf(course.credit, attended, score)
+    rec.status = attended ? 'ATTENDED' : 'ABSENT'
+    // 库里缺席行的 score 是 NULL，出 JSON 也必须是 null（前端据此显示「未考核」而不是「0 分」）
+    rec.score = attended && score >= 0 ? score : null
+    rec.credit = gained
+    if (remark) rec.remark = remark
+    if (attended && !rec.checkinAt) rec.checkinAt = nowStamp()
+    return ok({ trainingId: id, employeeId, status: trStatusLabel(rec.status), score: rec.score, credit: gained })
+  }
+
+  /** handleTrainingSignup：受众 + 时窗 + 名额三重校验，取消过的行复用原行复活。 */
+  private onTrainingSignup(call: Call, id: number): Reply {
+    const account = call.account as Account
+    if (account.employeeId <= 0) return err(403, '当前账号未关联员工档案，无法报名培训')
+    const course = this.trainings.find((c) => c.id === id)
+    if (!course) return err(404, '培训计划不存在')
+    const emp = this.employee(account.employeeId)
+    const rec = this.trRecord(id, emp.id)
+    const myStatus = rec ? rec.status : ''
+    if (myStatus === 'REGISTERED') return err(409, '你已报名该培训')
+    if (myStatus === 'ATTENDED') return err(409, '你已签到该培训，无需重复报名')
+    const audienceDeny = trAudienceDenied(course.deptId, emp.deptId)
+    if (audienceDeny) return err(403, audienceDeny)
+    const minToStart = trMinToStart(course.startTime)
+    const signed = this.trSigned(id)
+    const deny = trSignupDenied(course.status, minToStart, trCapacityLeft(course.capacity, signed))
+    if (deny) return err(400, deny)
+    if (rec) {
+      rec.status = 'REGISTERED'
+      rec.checkinAt = ''
+      rec.score = null
+      rec.credit = 0
+      rec.remark = ''
+    } else {
+      this.trainingRecords.push({ id: this.nextId(), trainingId: id, employeeId: emp.id, status: 'REGISTERED', checkinAt: '', score: null, credit: 0, remark: '' })
+    }
+    return ok({ trainingId: id, status: 'REGISTERED', capacityLeft: trCapacityLeft(course.capacity, signed + 1) })
+  }
+
+  /** handleTrainingUnsignup：仅未开课的 REGISTERED 行可自助取消。 */
+  private onTrainingUnsignup(call: Call, id: number): Reply {
+    const account = call.account as Account
+    if (account.employeeId <= 0) return err(403, '当前账号未关联员工档案，无法取消报名')
+    const course = this.trainings.find((c) => c.id === id)
+    if (!course) return err(404, '培训计划不存在')
+    const emp = this.employee(account.employeeId)
+    const rec = this.trRecord(id, emp.id)
+    const deny = trUnsignupDenied(rec ? rec.status : '', trMinToStart(course.startTime))
+    if (deny) return err(400, deny)
+    const row = rec as TrRecord
+    row.status = 'CANCELLED'
+    return ok({ trainingId: id, status: 'CANCELLED' })
+  }
+
+  /** handleTrainingCheckin：开课时窗（开课前 30 分钟 ~ 结课后 60 分钟）内自助签到。 */
+  private onTrainingCheckin(call: Call, id: number): Reply {
+    const account = call.account as Account
+    if (account.employeeId <= 0) return err(403, '当前账号未关联员工档案，无法签到')
+    const course = this.trainings.find((c) => c.id === id)
+    if (!course) return err(404, '培训计划不存在')
+    const emp = this.employee(account.employeeId)
+    const rec = this.trRecord(id, emp.id)
+    if (!rec) return err(400, '请先报名该培训')
+    if (rec.status === 'ATTENDED') return err(409, '你已签到，无需重复操作')
+    if (rec.status !== 'REGISTERED') return err(400, '只有「已报名」状态可以签到')
+    const deny = trCheckinDenied(trMinToStart(course.startTime), trMinSinceEnd(course.endTime))
+    if (deny) return err(400, deny)
+    rec.status = 'ATTENDED'
+    rec.checkinAt = nowStamp()
+    return ok({ trainingId: id, status: 'ATTENDED' })
   }
 }
 

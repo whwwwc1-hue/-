@@ -186,3 +186,147 @@ export const getUnreadCountApi = () => request.get<unknown, { unread: number }>(
 export const readNotificationApi = (id: number) =>
   request.put<unknown, { id: number; changed: number; unread?: number }>(`/notifications/${id}/read`, {})
 export const readAllNotificationsApi = () => request.post<unknown, { changed: number; unread: number }>('/notifications/read-all', {})
+
+// ==================== P4.1 培训与学分 ====================
+// 以下 interface 的字段名逐字对齐 backend-cangjie/src/controller/training_controller.cj
+// 里手拼 JSON 的 trainingPlanRowToJson / trainingOfferRowToJson / trainingRecordRowToJson /
+// trainingRosterRowToJson。该侧没有 schema 也没有类型检查，前端写错 key 只会静默变成
+// undefined（表格显示空白），排查成本极高，所以宁可把契约显式写在 interface 上。
+export interface TrainingPlan {
+  id: number
+  title: string
+  category: string
+  categoryLabel: string
+  trainer: string
+  deptId: number
+  deptName: string
+  startTime: string
+  endTime: string
+  /** 名额上限；后端约定 0 = 不限名额（hr_training.capacity 的语义） */
+  capacity: number
+  credit: number
+  location: string
+  description: string
+  status: string
+  statusLabel: string
+  signedCount: number
+  attendedCount: number
+}
+
+export interface TrainingOffer {
+  id: number
+  title: string
+  category: string
+  categoryLabel: string
+  trainer: string
+  deptName: string
+  startTime: string
+  endTime: string
+  capacity: number
+  credit: number
+  location: string
+  status: string
+  statusLabel: string
+  minToStart: number
+  minSinceEnd: number
+  myStatus: string
+  myStatusLabel: string
+  signedCount: number
+  /** -1 = 不限名额，正数是剩余名额；两者在员工端文案不同，不能统一按数字渲染 */
+  capacityLeft: number
+  canSignup: boolean
+  canCheckin: boolean
+  canUnsignup: boolean
+  blockReason: string
+  checkinAt: string
+}
+
+export interface TrainingRecord {
+  id: number
+  trainingId: number
+  title: string
+  category: string
+  categoryLabel: string
+  trainer: string
+  startTime: string
+  endTime: string
+  /** 本课程计划学分；已获得的学分是同名的 credit 字段（未结课时为 0） */
+  courseCredit: number
+  status: string
+  statusLabel: string
+  checkinAt: string
+  /** null = 未考核，与「考了 0 分」是两种业务语义，渲染必须区分 */
+  score: number | null
+  credit: number
+  remark: string
+}
+
+export interface TrainingRosterRow {
+  id: number
+  employeeId: number
+  name: string
+  empNo: string
+  deptName: string
+  status: string
+  statusLabel: string
+  checkinAt: string
+  score: number | null
+  credit: number
+  remark: string
+  userId: number
+}
+
+export interface TrainingRankRow {
+  employeeId: number
+  name: string
+  deptName: string
+  credit: number
+}
+
+export interface TrainingCourseStat {
+  trainingId: number
+  title: string
+  avgScore: number
+  signedCount: number
+  attendedCount: number
+  creditTotal: number
+}
+
+export const trainingListApi = (params?: { status?: string; category?: string; keyword?: string; deptId?: number }) =>
+  request.get<unknown, TrainingPlan[]>('/trainings', { params })
+// 新建固定落 DRAFT、PUT 同时承担「改内容」与「状态流转」，后端把内容校验做成无条件
+// （trainingValidateForm 先跑），因此状态流转也必须带完整内容，否则会被「培训主题必填」挡下。
+export const trainingCreateApi = (data: any) => request.post<unknown, { id: number; status: string }>('/trainings', data)
+export const trainingUpdateApi = (id: number, data: any) =>
+  request.put<unknown, { id: number; status: string; statusLabel: string }>(`/trainings/${id}`, data)
+export const trainingAvailableApi = () =>
+  request.get<unknown, { list: TrainingOffer[]; summary: { credit: number; enrolled: number; attended: number; hours: number } }>(
+    '/trainings/available'
+  )
+export const trainingMyApi = () =>
+  request.get<unknown, { list: TrainingRecord[]; totalCredit: number; enrolledCount: number; attendedCount: number; totalHours: number }>(
+    '/trainings/my'
+  )
+export const trainingStatsApi = () =>
+  request.get<
+    unknown,
+    {
+      overview: { total: number; published: number; done: number; draft: number; cancelled: number; totalHours: number; avgScore: number; coveredEmployees: number }
+      creditRank: TrainingRankRow[]
+      courseStats: TrainingCourseStat[]
+    }
+  >('/trainings/stats')
+export const trainingRosterApi = (id: number) =>
+  request.get<unknown, { trainingId: number; title: string; status: string; list: TrainingRosterRow[] }>(`/trainings/${id}/records`)
+/** score 留空（无考核）时传 -1：后端 getJsonFloat(obj, "score", -1.0) 用负数当「未录入」哨兵 */
+export const trainingResultApi = (id: number, data: { employeeId: number; attended: boolean; score: number; remark: string }) =>
+  request.post<unknown, { trainingId: number; employeeId: number; status: string; score: number | null; credit: number }>(
+    `/trainings/${id}/records`,
+    data
+  )
+export const trainingSignupApi = (id: number) =>
+  request.post<unknown, { trainingId: number; status: string; capacityLeft: number }>(`/trainings/${id}/signup`, {})
+export const trainingUnsignupApi = (id: number) =>
+  request.delete<unknown, { trainingId: number; status: string }>(`/trainings/${id}/signup`)
+export const trainingCheckinApi = (id: number) =>
+  request.post<unknown, { trainingId: number; status: string }>(`/trainings/${id}/checkin`, {})

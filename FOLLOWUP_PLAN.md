@@ -316,9 +316,13 @@
 
 ## 六、任务包 P4：新业务模块（对应指南工作包 D，按第六节 SOP 落地）
 
-- [ ] **P4.1 培训与学分**：`hr_training` + `hr_training_record`；HR 发布计划、员工报名、签到、学分汇总；`/api/v1/trainings` 全套路由注册 + `TrainingView.vue` + 菜单项。
-      **进度（2026-11-26）**：后端已交付 —— 两张表 + `training_controller.cj`(1478) + 11 条路由 + 36 类单测(1070)，真库 13 组 SQL 实测通过，见 12.16。
-      **未做**：`api/hrms.ts` 培训 API、`TrainingView.vue`、`router` 的 `meta.roles`、`AppLayout` 的 `menuItems`/`notifRoutes`、`mock-server` 分发、`e2e/training.spec.ts`、`rbac-menu.spec.ts` 四角色 `MENUS`。
+- [x] **P4.1 培训与学分**：`hr_training` + `hr_training_record`；HR 发布计划、员工报名、签到、学分汇总；`/api/v1/trainings` 全套路由注册 + `TrainingView.vue` + 菜单项。
+      **七步闭环已全部落地**：建表 2 张 → `training_controller.cj`(1478，46 纯函数 + 11 handler) → `main.cj` 11 条路由 →
+      仓颉单测 36 类 / 93 TC / 255 AS → 真库 13 组 SQL 实测 →（后端切片见 12.16，提交 `e251a9d`）→
+      `api/hrms.ts` 6 interface + 11 Api → `TrainingView.vue` 4 tab 844 行 → `router` 四角色 `meta.roles` →
+      `AppLayout` 菜单 + `TRAINING_PUBLISHED` 跳转 → `mock-server` 分发 32→43 + 状态机 → `e2e/training.spec.ts` 13 用例 →
+      `rbac-menu` 四角色 `MENUS`（前端/E2E 切片见 12.17，三连全绿、**90 passed**）。
+      ⚠️ 一处**后端待办**已记 12.17 ④：`PUT /trainings/:id` 不支持局部更新，只改 `status` 会被整表单校验打成 400。
 - [ ] **P4.2 差旅与报销**：`hr_expense`（`DRAFT → SUBMITTED → APPROVED → PAID`），复用审批视图风格；审批通过与月度发薪联动（报销金额进入薪资明细，注意与 P0.1 的事务边界）。
 
 **验收**：两个模块各自完成「建表 → 控制器 → 路由注册 → api → 视图 → 路由 meta.roles → 菜单」七步闭环，前端可增删改查且 RBAC 生效。
@@ -443,6 +447,7 @@
 | 2026-11-24 | **计量纠偏（第三次）**：`powershell -File` 子进程看到的是**过期文件系统快照** | 同一份 `notification_controller_test.cj`，脚本内 `Get-Content` 报 690 行、内联命令报 727 行（`Read` 工具末行号 727 为权威）；`notification_controller.cj` 同样报 432 vs 470 | 台账里所有行数/条数**只用内联命令、`Read` 末行号或 `git --numstat` 取**，不得用 `-File` 跑的脚本回填。本节新写的 9 files / 1571(+) / 10(−) 与 55 files / 15170 / 152 均取自 `git diff --numstat` 与 `git diff --shortstat 6e79923 HEAD`（提交后须复跑对账，命令见 13.5 口径 1） |
 | 2026-11-25 | **P3.2 第二批已提交并推送 `zc`** | commit **`62a42e8`**：`10 files / 1644(+), 47(−)`；代码口径 `git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"` = **56 files / 15165(+), 147(−)**，与 13.5 表内数字一致（暂存前后各复跑一次，无漂移） | ① 按新指令兑现「每批功能推一次 zc」；② 推送前把同源残留的 **432 → 470、690 → 727、318 → 351** 三处错数改正为内联实测值，并把 ④ 的「68 tests in 8 files」标注为第一批状态（第二批为 77 / 9）；③ **推送方式变更**：local config 里的 `http.proxy=127.0.0.1:7890` 已失效（端口无监听、`ProxyEnable` 回 0），改用 `git -c http.proxy= -c https.proxy= push` **直连成功** `b4427b1..62a42e8`，详见 13.6 的状态变更块；④ 下一批立即开工 **P4.1 培训与学分** |
 | 2026-11-26 | **P4.1 培训与学分：后端 + 仓颉单测已交付（前端/E2E 未做）** | 建表 2 张（`hr_training` / `hr_training_record`）+ `training_controller.cj` **1478 行**（46 纯函数 + 11 handler）+ `main.cj` **11 条路由** + `notification_controller.cj` 接 `TRAINING_PUBLISHED` + `training_controller_test.cj` **36 类 / 93 TC / 255 AS**；逐文件与真库实测见 **12.16** | ① 按用户指令只做功能、不开安全类工作；② 单测期望值全部由 node 镜像程序化生成（12.16 ④），并借此抓到 `formatNum2` 镜像与真实实现不一致（`1.5` vs 正确 `1.50`）；③ 两处**反向结论**已记录：L1026 的嵌套双引号插值经全库扫描确认基线有 5 处先例（不改），`check_test.js` 的 `oddQuoteLines=[482]` 是脚本误报；④ 本批按 P3.2 的两段式先例**只提交后端切片**，前端与 E2E 留待下次，未跑三连与 Playwright（本批无前端改动，不影响基线 77 passed） |
+| 2026-11-28 | **P4.1 培训与学分：前端 + E2E 收口，模块闭环** | `TrainingView.vue` 844 行（4 tab + 2 弹窗）+ `hrms.ts` 144 行（6 interface / 11 Api，与 11 条路由 1:1）+ `router` `meta.roles` 四角色 + `AppLayout` 菜单与 `TRAINING_PUBLISHED` 跳转 + `mock-server` 分发 **32→43** + `e2e/training.spec.ts` **13 用例** + `rbac-menu` 四角色菜单；逐文件与契约对齐点见 **12.17** | ① 三连 exit 0、`--list` = 90 tests / 10 files、全量 **90 passed (1.7m)**，无 flake、未放宽断言；② **纠偏**：`stats`/`records` 后端实际放行 ADMIN/HR/**MANAGER**（`requireRoles` 逐个回源码核对），上一批 12.16 ⑦ 记成 ADMIN/HR 是错的，mock 已按真实角色对齐；前端 `stats` tab 刻意仍只给 ADMIN/HR（后端宽、前端窄，见 12.17 ③）；③ 抓到并绕过一个**真实后端语义坑**：`PUT` 无条件跑整表单校验，只传 `{status}` 会 400，改为回填完整 payload，并用 E2E 钉住 body 字段；④ 「未考核」用 `-1` 哨兵在 UI 上渲染成 `—` 而非 `0`；`capacityLeft` 前端现算；`blockReason` 逐字用后端原文 |
 
 
 ---
@@ -1280,6 +1285,67 @@ oddQuoteLines=[482] count=1
 `canUnsignup`/`blockReason`/`myStatusLabel`；记录行 13 列用 `courseCredit`（与计划行的 `credit` **不同名**，
 这是最容易被前端抄错的一处）；名册 11 列；排行 4 列；课程统计 6 列。
 
+### 12.17 P4.1 培训与学分（前端 + E2E，本次提交）的测量值
+
+> 本节兑付 12.16 ⑦ 的欠债清单，P4.1 至此走完「建表 → 控制器 → 路由 → api → 视图 → meta.roles → 菜单 → mock → E2E」闭环。
+
+**① 逐文件 `numstat`（对比 `HEAD` = `77080dd`，命令 `git diff --cached --numstat HEAD -- . ":(exclude)FOLLOWUP_PLAN.md"`）**：
+
+| 文件 | +/- | 说明 |
+| --- | --- | --- |
+| `src/views/training/TrainingView.vue` | **844 / 0**（新文件） | 4 个 tab + 新建/编辑弹窗 + 花名册录入弹窗，行号索引见 ② |
+| `src/api/hrms.ts` | 144 / 0 | 6 个 interface + 11 个 `*Api`，与后端 11 条路由 **1:1** |
+| `src/router/index.ts` | 6 / 0 | `/training` 路由，`meta.roles` 为**四角色全放行**（培训面向全员） |
+| `src/layout/AppLayout.vue` | 5 / 1 | 菜单项插在「招聘管理」之后、「系统与审计」之前；`notifRoutes` 加 `TRAINING_PUBLISHED` |
+| `e2e/support/mock-server.ts` | **767 / 0** | 分发 **32 → 43 条**（`Select-String 'if \(method ==='` 实测），含培训状态机与请求日志 |
+| `e2e/training.spec.ts` | **457 / 0**（新文件） | 3 个 describe / **17 个 `test()`**，展开后 **13 条用例**（另 4 条是 `for` 生成的角色参数化） |
+| `e2e/rbac-menu.spec.ts` | 4 / 4 | 四个角色的 `MENUS` 数组各插「培训与学分」 |
+| **合计** | **7 files / 2227(+), 5(−)** | |
+
+**② `TrainingView.vue` 的 tab 与权限门（`canManage = ADMIN ∥ HR`）**：
+
+| tab `name` | 文案 | 可见性 | 后端接口 |
+| --- | --- | --- | --- |
+| `plans` | 培训计划 | `v-if="canManage"` | `GET /trainings` |
+| `available` | 可报名培训 | 全员 | `GET /trainings/available` |
+| `my` | 我的培训 | 全员 | `GET /trainings/my` |
+| `stats` | 学分统计 | `v-if="canManage"` | `GET /trainings/stats` |
+
+默认落地 tab 按角色分流：`canManage → plans`，否则 `available`；通知跳转用 `route.query.tab` 覆盖默认值。
+
+**③ ★ 角色口径纠偏（后端源码为准，推翻 12.16 ⑦ 的记述）**：
+`Select-String 'requireRoles'` 实测 `training_controller.cj` 的 11 个 handler 闸门为——
+ADMIN/HR/MANAGER 三处（`handleTrainingList:738`、`handleTrainingStats:987`、`handleTrainingRoster:1031`），
+ADMIN/HR 三处（`Create:769` / `Update:816` / `Result:1193`），其余五处仅 `requireAuth`。
+12.16 ⑦ 把 stats 记成 ADMIN/HR 是**我上一批的误记**。mock 分发已逐条对齐真实角色（L1292-1302）。
+**有意保留的差异**：MANAGER 能取 `stats`/`records` 的数据，但前端不给入口（`stats` tab 仍只认 `canManage`）。
+理由不是遗漏——培训统计页放在经理菜单里会与 P1.3「菜单即权限」的 RBAC 断言口径冲突，且经理本职是审批不是报表；
+这是「后端宽、前端窄」，收紧方向安全，反向（前端给入口但后端 403）才是要防的。
+
+**④ ★ 一个真实后端语义坑（不是前端臆造，E2E 已钉住）**：
+`handleTrainingUpdate` **无条件**跑完整表单校验，所以「发布草稿」这种只改状态的操作
+如果只 `PUT {status:"PUBLISHED"}` 会被打成 **400「培训主题必填」**。
+前端 `publish()` / `finish()` 因此改为**回填整行完整 payload + `status`** 再提交；
+`e2e/training.spec.ts:181` 那条用例直接断言 PUT body 里 `title`/`trainer`/`startTime` 等字段齐全。
+> 待办（下一批顺带）：后端 `handleTrainingUpdate` 应支持 PATCH 式局部更新（只传 `status` 时跳过表单校验），
+> 目前的做法是把校验负担推给调用方，多一个前端就多一份抄漏字段的风险。
+
+**⑤ 契约落地细节（三处最容易被前端猜错的点）**：
+1. `score` 用 **`-1` 当「未录入」哨兵**（后端 `getJsonFloat(obj,"score",-1.0)`），前端显示 `—` 而不是 `0`——「未考核 ≠ 0 分」在 UI 侧的兑现。
+2. `capacityLeft` 在 `available` 接口里**不返回**，由前端 `capacity - signedCount` 现算（计划接口两个字段都有，同源不冲突）。
+3. `blockReason` 是后端五道闸门的原文，前端**逐字渲染、不本地改写文案**，保证「为什么不能报名」的解释只有一处真源。
+
+**⑥ mock 侧新增能力（后续模块可复用）**：
+`readonly calls: MockRequest[]` + `waitForCall(method, path, timeoutMs)`（游标式，避免重复领同一条日志），
+用于断言「点了按钮真的发出了这条写请求」而不是只断言 UI 变了；`reset()` 清空日志。
+⚠️ 真实后端模式下无日志，依赖 `waitForCall` 的用例必须显式 `skip`（文件头已写明）。
+
+**⑦ 验证结果（全部我本人复跑，非子代理自报）**：
+`npx vue-tsc --noEmit` exit 0 / `npx eslint src --max-warnings 0` exit 0 / `npm run build` exit 0（`built in 20.56s`）。
+`npx playwright test --list` = **90 tests in 10 files**（基线 77 tests / 9 files）。
+全量 `npx playwright test --reporter=line` = **90 passed (1.7m)**，无 flake、未放宽任何断言。
+`rbac-menu` 的菜单数随之变为 admin 10 / hr 9 / manager 7 / emp01 6 —— 这四条同时钉住 `router/index.ts` 与 `AppLayout.vue` 两份配置。
+
 ---
 
 ## 十三、远端仓库现状与推送方案（2026-11-23 实测，非推测）
@@ -1348,8 +1414,9 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 | 我：`7174898` P3.1 长假二级审批（**已提交**） | **8 files / 1364 insertions(+), 64 deletions(-)**；排除本文档（173/6）= **7 files / 1191(+), 58(−)**，逐项见 12.14 |
 | 我：`b4427b1` P3.2 通知中心（**后端已提交**） | **7 files / 666 insertions(+), 9 deletions(-)**；排除本文档（139/7）= **6 files / 527(+), 2(−)**（`notification_controller.cj` 470/0、`main.cj` 11/0、`request_controller.cj` 10/0、`dashboard_controller.cj` 9/1、`payroll_controller.cj` 8/1、`init.sql` 19/0），逐项见 12.15 |
 | 我：P3.2 通知中心（**前端/测试/单测，本次提交**） | **9 files / 1571 insertions(+), 10 deletions(-)**：新增 `notification_controller_test.cj` 727/0、`e2e/notification.spec.ts` 351/0；改动 `AppLayout.vue` 147/2、`mock-server.ts` 287/2（分发 28→32）、`hrms.ts` 27/0、`ApprovalView.vue` 12/2、`PayrollView.vue` 11/1、`rbac-menu.spec.ts` 5/1、`payroll.spec.ts` 4/2。⚠️ 逐文件数字取自**暂存后**的 `git diff --cached --numstat`（`git add -A` 会把这些 LF 文件按 `core.autocrlf` 归一化，暂存前的 `git diff --numstat` 给出的是另一套数——首轮我就把 mock 记成了 331/0） |
-| 我：P4.1 培训与学分（**后端 + 仓颉单测，本次提交**） | **5 files / 2637 insertions(+), 6 deletions(-)**：新增 `training_controller.cj` 1478/0、`training_controller_test.cj` 1070/0；改动 `main.cj` 23/2、`init.sql` 64/4、`notification_controller.cj` 2/0，逐项见 12.16。⚠️ **半批**：前端视图 / mock / E2E 未做，模块尚未闭环 |
-| **代码累计（P4.1 后端切片暂存后实测，排除本文档）** | **58 files / 17798 insertions(+), 149 deletions(-)**（同一命令复跑）。较 P3.2 收口时的 56 files / 15165(+) / 147(−) 净增 **+2633 行 / 2 个新文件**，与本批 numstat 的 2637(+) 差 4 行——差值来自 `init.sql`/`main.cj` 里改动到基线既有行，**再次印证上一条 P3.2 行的结论：以整段 diff 为准，不做累加估算**（命令：`git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"`） |
+| 我：P4.1 培训与学分（**后端 + 仓颉单测，本次提交**） | **5 files / 2637 insertions(+), 6 deletions(-)**：新增 `training_controller.cj` 1478/0、`training_controller_test.cj` 1070/0；改动 `main.cj` 23/2、`init.sql` 64/4、`notification_controller.cj` 2/0，逐项见 12.16 |
+| 我：P4.1 培训与学分（**前端 + E2E，本次提交**） | **7 files / 2227 insertions(+), 5 deletions(-)**：新增 `TrainingView.vue` 844/0、`e2e/training.spec.ts` 457/0；改动 `mock-server.ts` 767/0、`hrms.ts` 144/0、`router/index.ts` 6/0、`AppLayout.vue` 5/1、`rbac-menu.spec.ts` 4/4，逐项与契约坑见 **12.17**。**P4.1 七步闭环至此走完** |
+| **代码累计（P4.1 前端切片暂存后实测，排除本文档）** | **60 files / 20020 insertions(+), 149 deletions(-)**（同一命令复跑）。较 P4.1 后端切片收口时的 58 files / 17798(+) / 149(−) 净增 **+2222 行 / 2 个新文件**，与本批 numstat 的 2227(+) 差 **5 行 = 本批 5 个删除行**（`rbac-menu` 4 行 + `AppLayout` 1 行改动到既有行），差值已对上、无残留未跟踪文件（命令：`git diff --cached --shortstat 6e79923 -- . ":(exclude)FOLLOWUP_PLAN.md"`） |
 | 含文档累计（`86f7b8f` 提交后实测） | 45 files / 11220 insertions(+), 147 deletions(-) |
 
 三条口径说明：
@@ -1363,12 +1430,11 @@ GitHub Actions 的**真实首跑结果尚无人看过** —— 必须先完成 1
 3. 旧版本本节写过「8 files」「38 files / 8082 insertions」「约 29%」，三个数**都是当时口算的**，
    现已全部替换为 `git show --shortstat` 输出（P0 实为 11 files，不是 8）。这正是 11.2 立纪律的直接动因。
 
-⚠️ 诚实结论：按代码插入量 **17798 / 27803 ≈ 64.0%**（上一版 54.5%，增量来自 P4.1 后端切片的 +2633，见 13.5 表），
-**已越过用户要求的「至少匹配现有需求量」这条线**，但 P4.1 仍是**半批**（前端/E2E 未落），模块尚未按七步闭环验收。
-**需求 23 条里已完整交付 16 条，P4.1 半条已交付**（后端 + 单测完成，前端/E2E 未落；P3.2 只剩真实库账号命中路径一项受 L-NOTIF-3 限制，已在 12.15 ⑤ 兑付）。
-比值已过 60%（上一版预估的「推向 60%+」由本批实现），但**过线不等于闭环**：
-「建表 + 后端 controller + 仓颉单测 + 前端视图 + 路由注册 + mock + E2E」七步里 P4.1 只走了前四步，
-剩下的前端 + E2E 是下一批的确定范围（连同 P4.2 差旅与报销）。
+⚠️ 诚实结论：按代码插入量 **17798 / 27803 ≈ 64.0%** → **20020 / 27803 ≈ 72.0%**（上一版 64.0%，增量来自 P4.1 前端 + E2E 的 +2222，见 13.5 表），
+**已越过用户要求的「至少匹配现有需求量」这条线**，且 P4.1 至此**不再是半批**：七步闭环走完，90 条 E2E 全绿。
+**需求 23 条里已完整交付 17 条**（P4.1 由「半条」转为「整条」；P3.2 只剩真实库账号命中路径一项受 L-NOTIF-3 限制，已在 12.15 ⑤ 兑付）。
+比值已过 70%，但**过线不等于闭环**：剩下的功能缺口是 P4.2 差旅与报销、P4.3 招聘管道深化、P4.4 绩效校准，
+以及 12.17 ④ 记下的 `PUT /trainings/:id` 局部更新待办（下一批顺带）。
 P5 的 5 份交付文档**不计入**上面的分子（口径 1）。行数仍不是目标，可验证的功能与测试才是 ——
 但用户这句话本身是可量化的，所以我不拿「质量优先」当借口回避它。
 

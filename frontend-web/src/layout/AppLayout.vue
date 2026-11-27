@@ -206,6 +206,8 @@ const menuItems = [
   { path: '/performance', title: '绩效评估', icon: 'TrendCharts', roles: ['ADMIN', 'HR', 'MANAGER', 'EMPLOYEE'] },
   { path: '/payroll', title: '薪酬与工资条', icon: 'WalletFilled', roles: ['ADMIN', 'HR', 'MANAGER', 'EMPLOYEE'] },
   { path: '/recruitment', title: '招聘管理', icon: 'Avatar', roles: ['ADMIN', 'HR'] },
+  // 顺序必须与 router children 一致，菜单与侧栏高亮/面包屑才不会和路由表脱节
+  { path: '/training', title: '培训与学分', icon: 'Reading', roles: ['ADMIN', 'HR', 'MANAGER', 'EMPLOYEE'] },
   { path: '/system', title: '系统与审计', icon: 'Setting', roles: ['ADMIN'] }
 ]
 
@@ -272,7 +274,9 @@ const notifRoutes: Record<string, { path: string; query?: Record<string, string>
   LEAVE_NEXT_LEVEL: { path: '/approval', query: { tab: 'approve' } },
   LEAVE_APPROVED: { path: '/approval' },
   LEAVE_REJECTED: { path: '/approval' },
-  CONTRACT_EXPIRING: { path: '/employee' }
+  CONTRACT_EXPIRING: { path: '/employee' },
+  // 培训发布通知面向全员，落到「可报名培训」而不是培训计划，员工点开就能报名
+  TRAINING_PUBLISHED: { path: '/training', query: { tab: 'available' } }
 }
 
 async function refreshUnreadCount() {
