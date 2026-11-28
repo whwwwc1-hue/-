@@ -84,7 +84,7 @@ public func queryRows(sql: String): ArrayList<ArrayList<String>> {
     let (code, outStr, errStr) = runMysqlFile(sql)
     if (code != 0) {
         println("SQL Error (${code}): ${errStr}")
-        return rows
+        throw Exception("数据库查询失败：${errStr.trimAscii()}")
     }
     let lines = outStr.split("\n")
     for (rawLine in lines) {
@@ -126,7 +126,7 @@ public func executeSql(sql: String): Bool {
     let (code, _, errStr) = runMysqlFile(sql)
     if (code != 0) {
         println("SQL Exec Error (${code}): ${errStr}")
-        return false
+        throw Exception("数据库写入失败：${errStr.trimAscii()}")
     }
     return true
 }
@@ -136,7 +136,7 @@ public func insertAndGetId(insertSql: String): Int64 {
     let (code, outStr, errStr) = runMysqlFile(combined)
     if (code != 0) {
         println("SQL Insert Error (${code}): ${errStr}")
-        return 0
+        throw Exception("数据库写入失败：${errStr.trimAscii()}")
     }
     let lines = outStr.split("\n")
     var lastVal: Int64 = 0

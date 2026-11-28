@@ -9,20 +9,26 @@ import hrms_backend.middleware.*
 import hrms_backend.controller.*
 
 func seedDefaultUsers(): Unit {
-    let cnt = querySingleInt("SELECT COUNT(*) FROM sys_user", 0)
-    if (cnt > 0) {
-        return
-    }
-    let defaultHash = hashPassword("123456")
-    let sql = """
+    try {
+        let cnt = querySingleInt("SELECT COUNT(*) FROM sys_user", 0)
+        if (cnt > 0) {
+            return
+        }
+        let defaultHash = hashPassword("123456")
+        let sql = """
 INSERT INTO sys_user (username, password_hash, role, employee_id, is_active) VALUES
 ('admin', ${sqlStr(defaultHash)}, 'ADMIN', 1, 1),
 ('hr', ${sqlStr(defaultHash)}, 'HR', 2, 1),
 ('manager', ${sqlStr(defaultHash)}, 'MANAGER', 3, 1),
 ('emp01', ${sqlStr(defaultHash)}, 'EMPLOYEE', 4, 1);
 """
-    if (executeSql(sql)) {
-        println("Default demo accounts initialized (admin, hr, manager, emp01 / 123456).")
+        if (executeSql(sql)) {
+            println("Default demo accounts initialized (admin, hr, manager, emp01 / 123456).")
+        }
+    } catch (e: Exception) {
+        println("数据库初始化失败：${e.message}")
+        println("请确认 MySQL 服务已启动、backend-cangjie/.env 连接配置正确，并已导入 sql/init.sql。")
+        throw e
     }
 }
 
