@@ -2,10 +2,21 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { getMeApi, type UserProfile } from '@/api/hrms'
 
+const VALID_ROLES = ['ADMIN', 'HR', 'MANAGER', 'EMPLOYEE']
+
 function loadStoredUser(): UserProfile | null {
   try {
     const raw = localStorage.getItem('hrms_user')
-    return raw ? JSON.parse(raw) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    // 旧版本缓存、手工改库或历史遗留数据可能带着非法角色，
+    // 这类数据会让路由守卫在「无权 -> 跳工作台 -> 工作台也无权」之间死循环，
+    // 因此读缓存时就把它丢掉。
+    if (!parsed || typeof parsed !== 'object' || !VALID_ROLES.includes(parsed.role)) {
+      localStorage.removeItem('hrms_user')
+      return null
+    }
+    return parsed as UserProfile
   } catch {
     return null
   }

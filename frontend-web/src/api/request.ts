@@ -18,7 +18,9 @@ function clearAuthAndRedirect(msg: string) {
     redirectingToLogin = true
     ElMessage.error(msg || '登录已过期，请重新登录')
     if (window.location.pathname !== '/login') {
-      window.location.href = '/login'
+      // 记住当前页面，登录成功后回到原处，避免深链接失效后只能落在工作台。
+      const current = `${window.location.pathname}${window.location.search}`
+      window.location.href = `/login?redirect=${encodeURIComponent(current)}`
     }
     setTimeout(() => {
       redirectingToLogin = false

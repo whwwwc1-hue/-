@@ -97,12 +97,13 @@
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { loginApi } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 
 const formRef = ref<FormInstance>()
@@ -142,7 +143,9 @@ async function handleLogin() {
     })
     auth.setAuth(res.token, res.user)
     ElMessage.success(`欢迎回来，${res.user.name || res.user.username}`)
-    router.replace('/dashboard')
+    // 登录前被 401 拦到登录页时带着 redirect，登录成功后回到原页面
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+    router.replace(redirect.startsWith('/') ? redirect : '/dashboard')
   } finally {
     loading.value = false
   }

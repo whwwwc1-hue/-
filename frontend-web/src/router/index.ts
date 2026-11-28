@@ -88,11 +88,13 @@ const router = createRouter({
   routes
 })
 
+const DASHBOARD_ROLES = ['ADMIN', 'HR', 'MANAGER', 'EMPLOYEE']
+
 router.beforeEach(async (to, _from, next) => {
   const auth = useAuthStore()
   if (to.path === '/login') {
-    if (auth.isAuthenticated) {
-      next('/dashboard')
+    if (auth.isAuthenticated && auth.hasRole(DASHBOARD_ROLES)) {
+      next((to.query.redirect as string) || '/dashboard')
     } else {
       next()
     }
@@ -100,7 +102,7 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   if (!auth.isAuthenticated) {
-    next('/login')
+    next({ path: '/login', query: to.fullPath === '/' ? {} : { redirect: to.fullPath } })
     return
   }
 
@@ -117,6 +119,13 @@ router.beforeEach(async (to, _from, next) => {
   const allowedRoles = to.meta?.roles as string[] | undefined
   if (allowedRoles && !auth.hasRole(allowedRoles)) {
     ElMessage.warning('当前账号无权访问该模块')
+    // 角色异常（缓存脏数据 / 账号被改成未知角色）时不能再往工作台跳，
+    // 否则会在「无权 -> 工作台 -> 工作台也无权」之间无限重定向并白屏。
+    if (!auth.hasRole(DASHBOARD_ROLES)) {
+      auth.logout()
+      next('/login')
+      return
+    }
     next('/dashboard')
     return
   }
