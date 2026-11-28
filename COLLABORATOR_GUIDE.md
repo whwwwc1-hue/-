@@ -342,7 +342,7 @@ MYSQL_EXE=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 
 ### 工作包 B：数据导入导出与文档打印（前端体验增强）
 - [ ] **员工花名册 Excel/CSV 批量导入**：前端解析 `.csv` / `.xlsx` 后批量调用或新增 `POST /api/v1/employees/import` 批量入库。
-- [ ] **电子工资条 PDF 导出 / 打印样式**：在 [PayrollView.vue](./frontend-web/src/views/payroll/PayrollView.vue) 的「电子凭条」弹窗加入 `@media print` 专版样式或 PDF 导出按钮。
+- [x] **电子工资条 PDF 导出 / 打印样式**：已在 [PayrollView.vue](./frontend-web/src/views/payroll/PayrollView.vue) 的「电子凭条」弹窗中加入「打印工资条」按钮，并在 [style.css](./frontend-web/src/style.css) 中补充 `@media print` 专版打印样式（支持浏览器直接导出 PDF）。
 - [ ] **考勤月度汇总报表导出**：按部门导出月度出勤率、迟到早退、请假工时统计表。
 
 ### 工作包 C：多级审批与通知提醒中心（业务流深化）
@@ -412,3 +412,16 @@ pnpm build       # 构建成功
 ```
 
 后端改动请在具备仓颉环境的机器上执行 `cjpm build` 复核；本轮后端改动均为「读现值再覆盖 / 条件更新 / 抛异常」这类局部改造，未改动包结构与 `cjpm.toml`。
+
+---
+
+### `zys` 分支增量优化记录（未改动 `main` 分支）
+
+| 提交类型 | 内容 | 关键文件 |
+| --- | --- | --- |
+| `refactor(backend)` | 清理 7 处未使用的 `import`，实现 `cjpm build` 零警告通过 | `jwt_util.cj`、`response.cj`、`auth.cj`、`dashboard_controller.cj`、`notification_controller.cj` |
+| `refactor(frontend)` | 抽取绩效评级与奖金系数映射工具 `resolvePerformanceGrade` / `performanceGradeTagType` | `constants/performance.ts`、`PerformanceView.vue` |
+| `test(frontend)` | 补充绩效评级全边界与异常输入 Vitest 单元测试 | `constants/performance.spec.ts` |
+| `refactor(frontend)` | 抽取带 UTF-8 BOM 的通用 CSV 导出工具 `csv.ts` 并补充单元测试 | `utils/csv.ts`、`utils/csv.spec.ts`、`PayrollView.vue` |
+| `feat(payroll)` | 电子工资条弹窗新增「打印工资条」及 `@media print` 打印样式 | `PayrollView.vue`、`style.css` |
+| `docs` | 更新任务清单与 `zys` 分支工具模块及验证说明 | `COLLABORATOR_GUIDE.md` |
