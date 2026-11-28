@@ -53,6 +53,30 @@ public func handleRequestCreate(ctx: HttpContext): Unit {
                         sendErr(ctx, 400, 400, "类型、开始时间、结束时间、时长与事由均不能为空")
                         return
                     }
+                    if (category != "LEAVE" && category != "OVERTIME") {
+                        sendErr(ctx, 400, 400, "申请类别取值非法（仅支持 LEAVE/OVERTIME）")
+                        return
+                    }
+                    // 时长由前端提交，必须服务端再校验一遍与起止时间的跨度是否匹配，
+                    // 否则可以申报远超实际时段的加班/请假，直接影响薪资与年假扣减。
+                    let spanMins = querySingleInt("SELECT IFNULL(TIMESTAMPDIFF(MINUTE, ${sqlStr(startTime)}, ${sqlStr(endTime)}), -1)", -1)
+                    if (spanMins <= 0) {
+                        sendErr(ctx, 400, 400, "结束时间必须晚于开始时间，且格式须为 YYYY-MM-DD HH:mm:ss")
+                        return
+                    }
+                    if (category == "OVERTIME") {
+                        let maxHours = Float64(spanMins) / 60.0
+                        if (duration > maxHours + 0.01) {
+                            sendErr(ctx, 400, 400, "加班时长（${formatNum2(duration)} 小时）不能超过起止时间跨度（${formatNum2(maxHours)} 小时）")
+                            return
+                        }
+                    } else {
+                        let maxDays = Float64(spanMins) / 1440.0 + 1.0
+                        if (duration > maxDays) {
+                            sendErr(ctx, 400, 400, "请假时长（${formatNum2(duration)} 天）不能超过起止时间跨度（约 ${formatNum2(maxDays)} 天）")
+                            return
+                        }
+                    }
                     if (category == "LEAVE" && subType == "ANNUAL") {
                         let balStr = querySingleValue("SELECT annual_leave_balance FROM hr_employee WHERE id = ${u.employeeId}")
                         let bal = Float64.tryParse(balStr) ?? 0.0
@@ -214,6 +238,10 @@ LIMIT 1
                 sendErr(ctx, 403, 403, "部门主管仅可审批本部门申请")
                 return
             }
+            if (empId == u.employeeId) {
+                sendErr(ctx, 403, 403, "不能审批本人提交的申请，请交由上级或 HR 处理")
+                return
+            }
             if (curStatus != "PENDING") {
                 sendErr(ctx, 400, 400, "该申请单已处理，无法重复审批")
                 return
@@ -237,15 +265,30 @@ LIMIT 1
                             sendErr(ctx, 400, 400, "员工剩余年假不足（当前 ${formatNum2(curBalance)} 天），无法审批通过")
                             return
                         }
-                        let txSql = """
-START TRANSACTION;
-UPDATE hr_employee SET annual_leave_balance = annual_leave_balance - ${formatNum2(duration)} WHERE id = ${empId};
-UPDATE hr_leave_overtime SET status = 'APPROVED', approver_id = ${u.userId}, approve_remark = ${sqlNullableStr(remark)}, approved_at = NOW() WHERE id = ${reqId};
-COMMIT;
-"""
-                        executeSql(txSql)
+                        // 条件更新抢占 PENDING -> APPROVED，并发审批时只有一次会成功，避免重复扣年假。
+                        let affected = querySingleInt("""
+UPDATE hr_leave_overtime SET status = 'APPROVED', approver_id = ${u.userId}, approve_remark = ${sqlNullableStr(remark)}, approved_at = NOW() WHERE id = ${reqId} AND status = 'PENDING';
+SELECT ROW_COUNT();
+""", 0)
+                        if (affected <= 0) {
+                            sendErr(ctx, 400, 400, "该申请单已被其他审批人处理，请刷新后重试")
+                            return
+                        }
+                        if (!executeSql("UPDATE hr_employee SET annual_leave_balance = annual_leave_balance - ${formatNum2(duration)} WHERE id = ${empId} AND annual_leave_balance >= ${formatNum2(duration)}")) {
+                            // 扣减失败要把状态回滚，避免「已批准但年假没扣」的不一致
+                            executeSql("UPDATE hr_leave_overtime SET status = 'PENDING', approver_id = NULL, approved_at = NULL, approve_remark = NULL WHERE id = ${reqId}")
+                            sendErr(ctx, 500, 500, "年假扣减失败，审批已回滚，请重试")
+                            return
+                        }
                     } else {
-                        executeSql("UPDATE hr_leave_overtime SET status = ${sqlStr(action)}, approver_id = ${u.userId}, approve_remark = ${sqlNullableStr(remark)}, approved_at = NOW() WHERE id = ${reqId}")
+                        let affected = querySingleInt("""
+UPDATE hr_leave_overtime SET status = ${sqlStr(action)}, approver_id = ${u.userId}, approve_remark = ${sqlNullableStr(remark)}, approved_at = NOW() WHERE id = ${reqId} AND status = 'PENDING';
+SELECT ROW_COUNT();
+""", 0)
+                        if (affected <= 0) {
+                            sendErr(ctx, 400, 400, "该申请单已被其他审批人处理，请刷新后重试")
+                            return
+                        }
                     }
                     writeAuditLog(u, "假勤审批", "审批${category}", "审批单 ID=${reqId} (${empName}, ${subType}, 时长=${formatNum2(duration)}) -> ${action}")
                     sendOk(ctx, "{\"id\":${reqId},\"status\":${jsonStr(action)}}")
