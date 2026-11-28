@@ -120,12 +120,12 @@
               @change="searchAll"
             />
             <el-select v-model="allFilters.status" clearable placeholder="考勤状态" class="!w-36" @change="searchAll">
-              <el-option label="正常" value="NORMAL" />
-              <el-option label="迟到" value="LATE" />
-              <el-option label="早退" value="EARLY" />
-              <el-option label="迟到且早退" value="LATE_EARLY" />
-              <el-option label="请假" value="LEAVE" />
-              <el-option label="缺勤" value="ABSENT" />
+              <el-option
+                v-for="opt in ATTENDANCE_STATUS_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
             </el-select>
             <el-button type="primary" plain icon="Search" @click="searchAll">筛选</el-button>
           </div>
@@ -168,11 +168,12 @@
       <el-form :model="fixForm" label-width="92px">
         <el-form-item label="考勤状态">
           <el-select v-model="fixForm.status" class="w-full">
-            <el-option label="正常 NORMAL" value="NORMAL" />
-            <el-option label="迟到 LATE" value="LATE" />
-            <el-option label="早退 EARLY" value="EARLY" />
-            <el-option label="请假 LEAVE" value="LEAVE" />
-            <el-option label="缺勤 ABSENT" value="ABSENT" />
+            <el-option
+              v-for="opt in ATTENDANCE_STATUS_OPTIONS"
+              :key="opt.value"
+              :label="`${opt.label} ${opt.value}`"
+              :value="opt.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="备注说明">
@@ -199,6 +200,11 @@ import {
   updateAttendanceApi
 } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
+import {
+  ATTENDANCE_STATUS_OPTIONS,
+  attendanceStatusLabel as attStatusLabel,
+  attendanceStatusTagType as attTagType
+} from '@/constants/attendance'
 
 const auth = useAuthStore()
 const canManageAttendance = computed(() => auth.hasRole(['ADMIN', 'HR', 'MANAGER']))
@@ -224,25 +230,6 @@ const allPagination = reactive({ page: 1, pageSize: 10, total: 0 })
 const fixDialogVisible = ref(false)
 const fixLoading = ref(false)
 const fixForm = reactive({ id: 0, empName: '', status: 'NORMAL', remark: '' })
-
-function attStatusLabel(s: string) {
-  const m: Record<string, string> = {
-    NORMAL: '正常',
-    LATE: '迟到',
-    EARLY: '早退',
-    LATE_EARLY: '迟到且早退',
-    LEAVE: '请假',
-    ABSENT: '缺勤'
-  }
-  return m[s] || s
-}
-
-function attTagType(s: string): 'success' | 'warning' | 'danger' | 'info' {
-  if (s === 'NORMAL') return 'success'
-  if (s === 'LEAVE') return 'info'
-  if (s === 'ABSENT') return 'danger'
-  return 'warning'
-}
 
 async function loadToday() {
   todayAtt.value = await getTodayAttendanceApi()

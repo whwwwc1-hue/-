@@ -163,6 +163,7 @@ public func handleAttendanceList(ctx: HttpContext): Unit {
         case None => return
         case Some(u) =>
             let month = getQueryStr(ctx, "month", "").trimAscii()
+            let workDate = getQueryStr(ctx, "date", "").trimAscii()
             let reqDeptId = getQueryInt(ctx, "deptId", 0)
             let status = getQueryStr(ctx, "status", "").trimAscii()
             let keyword = getQueryStr(ctx, "keyword", "").trimAscii()
@@ -180,6 +181,9 @@ public func handleAttendanceList(ctx: HttpContext): Unit {
             }
             if (!month.isEmpty()) {
                 conds.add("DATE_FORMAT(a.work_date, '%Y-%m') = ${sqlStr(month)}")
+            }
+            if (workDate.size == 10) {
+                conds.add("a.work_date = ${sqlStr(workDate)}")
             }
             if (!status.isEmpty()) {
                 conds.add("a.status = ${sqlStr(status)}")
@@ -222,12 +226,40 @@ public func handleAttendanceUpdate(ctx: HttpContext, attId: Int64): Unit {
                     sendErr(ctx, 400, 400, "请求体 JSON 格式错误")
                     return
                 case Some(obj) =>
-                    let status = getJsonStr(obj, "status", "NORMAL").trimAscii()
-                    let lateMinutes = getJsonInt(obj, "lateMinutes", 0)
-                    let earlyMinutes = getJsonInt(obj, "earlyMinutes", 0)
-                    let remark = getJsonStr(obj, "remark", "").trimAscii()
+                    // 补卡接口只更新请求体里出现的字段，避免 HR 仅改备注时把迟到/早退分钟数清零，
+                    // 这两个字段直接参与月度薪资的考勤扣款计算。
+                    let fixRows = queryRows("SELECT status, late_minutes, early_minutes, IFNULL(remark, '') FROM hr_attendance WHERE id = ${attId} LIMIT 1")
+                    if (fixRows.size == 0) {
+                        sendErr(ctx, 404, 404, "考勤记录不存在")
+                        return
+                    }
+                    let cur = fixRows[0]
+                    var status = cur[0]
+                    var lateMinutes = Int64.tryParse(cur[1]) ?? 0
+                    var earlyMinutes = Int64.tryParse(cur[2]) ?? 0
+                    var remark = cur[3]
+                    if (hasJsonKey(obj, "status")) { status = getJsonStr(obj, "status", status).trimAscii() }
+                    if (hasJsonKey(obj, "lateMinutes")) { lateMinutes = getJsonInt(obj, "lateMinutes", lateMinutes) }
+                    if (hasJsonKey(obj, "earlyMinutes")) { earlyMinutes = getJsonInt(obj, "earlyMinutes", earlyMinutes) }
+                    if (hasJsonKey(obj, "remark")) { remark = getJsonStr(obj, "remark", remark).trimAscii() }
+                    let allowedStatus = ["NORMAL", "LATE", "EARLY_LEAVE", "LATE_AND_EARLY", "LEAVE", "ABSENT"]
+                    var statusOk = false
+                    for (s in allowedStatus) {
+                        if (status == s) { statusOk = true }
+                    }
+                    if (!statusOk) {
+                        sendErr(ctx, 400, 400, "考勤状态取值非法（仅支持 NORMAL/LATE/EARLY_LEAVE/LATE_AND_EARLY/LEAVE/ABSENT）")
+                        return
+                    }
+                    if (lateMinutes < 0 || earlyMinutes < 0) {
+                        sendErr(ctx, 400, 400, "迟到/早退分钟数不能为负数")
+                        return
+                    }
                     let sql = "UPDATE hr_attendance SET status=${sqlStr(status)}, late_minutes=${lateMinutes}, early_minutes=${earlyMinutes}, remark=${sqlNullableStr(remark)} WHERE id=${attId}"
-                    executeSql(sql)
+                    if (!executeSql(sql)) {
+                        sendErr(ctx, 500, 500, "考勤记录修正失败")
+                        return
+                    }
                     writeAuditLog(u, "考勤管理", "修正考勤", "修正考勤记录 ID=${attId}：状态=${status}，迟到=${lateMinutes}分，早退=${earlyMinutes}分，备注=${remark}")
                     sendOk(ctx, "null")
             }
