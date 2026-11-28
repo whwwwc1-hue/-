@@ -164,6 +164,7 @@ import {
 } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
 import { confirmAction } from '@/utils/confirm'
+import { downloadCsv } from '@/utils/csv'
 import { formatMonth } from '@/utils/date'
 
 const auth = useAuthStore()
@@ -328,14 +329,7 @@ function exportCsv() {
     r.netSalary,
     r.status
   ])
-  const csvContent = '\uFEFF' + [headers, ...rows].map((row) => row.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `payroll_${filters.payMonth || 'export'}.csv`
-  link.click()
-  URL.revokeObjectURL(url)
+  downloadCsv(`payroll_${filters.payMonth || 'export'}.csv`, headers, rows)
 }
 
 function openSlipModal(row: any) {
