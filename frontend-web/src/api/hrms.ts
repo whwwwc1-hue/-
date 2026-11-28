@@ -27,6 +27,23 @@ export interface PageResult<T> {
   pageSize: number
 }
 
+export interface NotificationItem {
+  id: number
+  title: string
+  content: string
+  bizType: 'SYSTEM' | 'APPROVAL' | 'PAYROLL' | 'CONTRACT' | string
+  isRead: boolean
+  createdAt: string
+}
+
+export interface NotificationPage {
+  list: NotificationItem[]
+  total: number
+  page: number
+  pageSize: number
+  unread: number
+}
+
 export const loginApi = (data: { username: string; password: string }) =>
   request.post<unknown, { token: string; user: UserProfile }>('/auth/login', data)
 
@@ -94,3 +111,11 @@ export const hireCandidateApi = (id: number, data: any) => request.post<unknown,
 export const getSystemUsersApi = () => request.get<unknown, any[]>('/system/users')
 export const updateSystemUserApi = (id: number, data: any) => request.put<unknown, null>(`/system/users/${id}`, data)
 export const getAuditLogsApi = (params: any) => request.get<unknown, PageResult<any>>('/system/audit-logs', { params })
+
+export const getNotificationsApi = (params?: { page?: number; pageSize?: number; onlyUnread?: number }) =>
+  request.get<unknown, NotificationPage>('/notifications', { params })
+
+export const markNotificationReadApi = (id: number) =>
+  request.post<unknown, null>(`/notifications/${id}/read`, {})
+
+export const markAllNotificationsReadApi = () => request.post<unknown, null>('/notifications/read-all', {})

@@ -290,6 +290,12 @@ SELECT ROW_COUNT();
                             return
                         }
                     }
+                    var remarkText = remark
+                    if (remarkText.isEmpty()) {
+                        remarkText = "无"
+                    }
+                    let resultText = if (action == "APPROVED") { "通过" } else { "驳回" }
+                    pushNotificationToEmployee(empId, "假勤审批结果", "你提交的${subType}申请已${resultText}，审批意见：${remarkText}", "APPROVAL")
                     writeAuditLog(u, "假勤审批", "审批${category}", "审批单 ID=${reqId} (${empName}, ${subType}, 时长=${formatNum2(duration)}) -> ${action}")
                     sendOk(ctx, "{\"id\":${reqId},\"status\":${jsonStr(action)}}")
             }

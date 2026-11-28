@@ -196,7 +196,7 @@ public func handlePayrollPaySingle(ctx: HttpContext, payrollId: Int64): Unit {
     match (requireRoles(ctx, ["ADMIN", "HR"])) {
         case None => return
         case Some(u) =>
-            let rows = queryRows("SELECT p.status, p.pay_month, e.name, p.net_salary FROM hr_payroll p LEFT JOIN hr_employee e ON p.employee_id = e.id WHERE p.id = ${payrollId} LIMIT 1")
+            let rows = queryRows("SELECT p.status, p.pay_month, e.name, p.net_salary, p.employee_id FROM hr_payroll p LEFT JOIN hr_employee e ON p.employee_id = e.id WHERE p.id = ${payrollId} LIMIT 1")
             if (rows.size == 0) {
                 sendErr(ctx, 404, 404, "工资单不存在")
                 return
@@ -206,6 +206,7 @@ public func handlePayrollPaySingle(ctx: HttpContext, payrollId: Int64): Unit {
                 return
             }
             executeSql("UPDATE hr_payroll SET status='PAID', paid_at=NOW() WHERE id=${payrollId}")
+            pushNotificationToEmployee(Int64.tryParse(rows[0][4]) ?? 0, "工资条已发放", "你的 ${rows[0][1]} 月度工资单已发放，实发 ${rows[0][3]} 元，可在「薪酬与工资条」查看电子凭条。", "PAYROLL")
             writeAuditLog(u, "薪酬管理", "发放工资", "确认发放 ${rows[0][2]} (${rows[0][1]}) 实发 ${rows[0][3]} 元")
             sendOk(ctx, "null")
     }
@@ -225,8 +226,16 @@ public func handlePayrollBatchPay(ctx: HttpContext): Unit {
                         sendErr(ctx, 400, 400, "请指定发薪月份 payMonth")
                         return
                     }
-                    let cnt = querySingleInt("SELECT COUNT(*) FROM hr_payroll WHERE pay_month = ${sqlStr(payMonth)} AND status = 'DRAFT'", 0)
+                    let draftRows = queryRows("SELECT employee_id, net_salary FROM hr_payroll WHERE pay_month = ${sqlStr(payMonth)} AND status = 'DRAFT'")
+                    let cnt = draftRows.size
+                    if (cnt == 0) {
+                        sendErr(ctx, 400, 400, "该月份没有待发放的工资单")
+                        return
+                    }
                     executeSql("UPDATE hr_payroll SET status='PAID', paid_at=NOW() WHERE pay_month=${sqlStr(payMonth)} AND status='DRAFT'")
+                    for (r in draftRows) {
+                        pushNotificationToEmployee(Int64.tryParse(r[0]) ?? 0, "工资条已发放", "你的 ${payMonth} 月度工资单已发放，实发 ${r[1]} 元。", "PAYROLL")
+                    }
                     writeAuditLog(u, "薪酬管理", "批量发薪", "批量发放 ${payMonth} 月度工资单，共 ${cnt} 笔")
                     sendOk(ctx, "{\"paidCount\":${cnt}}")
             }

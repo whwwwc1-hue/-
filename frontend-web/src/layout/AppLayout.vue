@@ -60,6 +60,11 @@
         </div>
 
         <div class="flex items-center gap-4">
+          <el-badge :value="unreadCount" :max="99" :hidden="unreadCount === 0">
+            <el-button text circle title="消息通知" @click="openNotificationDrawer">
+              <el-icon :size="18"><Bell /></el-icon>
+            </el-button>
+          </el-badge>
           <el-tag :type="roleTagType" effect="light" round>
             {{ roleLabel }}
           </el-tag>
@@ -108,15 +113,48 @@
         <el-button type="primary" :loading="pwdLoading" @click="submitPassword">确认修改</el-button>
       </template>
     </el-dialog>
+    <!-- Notification Drawer -->
+    <el-drawer v-model="notifyVisible" title="消息通知" size="380px">
+      <div class="mb-3 flex items-center justify-between">
+        <span class="text-xs text-slate-400">未读 {{ unreadCount }} 条</span>
+        <el-button link type="primary" size="small" :disabled="unreadCount === 0" @click="markAllRead">
+          全部标为已读
+        </el-button>
+      </div>
+      <el-empty v-if="notifications.length === 0" description="暂无消息" :image-size="80" />
+      <div
+        v-for="item in notifications"
+        :key="item.id"
+        class="mb-3 cursor-pointer rounded-lg border p-3 transition-colors"
+        :class="item.isRead ? 'border-slate-200 bg-white' : 'border-blue-200 bg-blue-50/60'"
+        @click="markOneRead(item)"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <span class="truncate text-sm font-medium text-slate-800">{{ item.title }}</span>
+          <el-tag size="small" :type="notifyTagType(item.bizType)">{{ notifyBizLabel(item.bizType) }}</el-tag>
+        </div>
+        <p class="mt-1 text-xs leading-relaxed text-slate-600">{{ item.content }}</p>
+        <div class="mt-1 text-[11px] text-slate-400">{{ item.createdAt }}</div>
+      </div>
+      <div v-if="notifications.length < notifyTotal" class="flex justify-center pt-2">
+        <el-button link type="primary" :loading="notifyLoading" @click="loadMoreNotifications">加载更多</el-button>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { updatePasswordApi } from '@/api/hrms'
+import {
+  getNotificationsApi,
+  markAllNotificationsReadApi,
+  markNotificationReadApi,
+  updatePasswordApi,
+  type NotificationItem
+} from '@/api/hrms'
 
 const route = useRoute()
 const router = useRouter()
@@ -155,6 +193,103 @@ const roleMap: Record<string, { label: string; type: 'danger' | 'primary' | 'war
 
 const roleLabel = computed(() => roleMap[auth.role]?.label || auth.role)
 const roleTagType = computed(() => roleMap[auth.role]?.type || 'info')
+
+// ---- 站内消息通知 ----
+const notifyVisible = ref(false)
+const notifyLoading = ref(false)
+const notifications = ref<NotificationItem[]>([])
+const notifyTotal = ref(0)
+const unreadCount = ref(0)
+const notifyPage = ref(1)
+let unreadTimer: number | undefined
+
+const NOTIFY_BIZ_LABELS: Record<string, string> = {
+  SYSTEM: '系统',
+  APPROVAL: '审批',
+  PAYROLL: '薪酬',
+  CONTRACT: '合同'
+}
+
+function notifyBizLabel(bizType: string): string {
+  return NOTIFY_BIZ_LABELS[bizType] || bizType
+}
+
+function notifyTagType(bizType: string): 'primary' | 'success' | 'warning' | 'info' {
+  if (bizType === 'APPROVAL') return 'warning'
+  if (bizType === 'PAYROLL') return 'success'
+  if (bizType === 'CONTRACT') return 'info'
+  return 'primary'
+}
+
+async function loadNotifications(reset = false) {
+  notifyLoading.value = true
+  try {
+    if (reset) {
+      notifyPage.value = 1
+      notifications.value = []
+    }
+    const res = await getNotificationsApi({ page: notifyPage.value, pageSize: 10 })
+    notifications.value = reset ? res.list : notifications.value.concat(res.list)
+    notifyTotal.value = res.total
+    unreadCount.value = res.unread
+  } catch {
+    // 请求拦截器已统一提示，这里只保证抽屉不卡在 loading
+  } finally {
+    notifyLoading.value = false
+  }
+}
+
+async function refreshUnreadCount() {
+  try {
+    const res = await getNotificationsApi({ page: 1, pageSize: 1 })
+    unreadCount.value = res.unread
+  } catch {
+    // 静默失败：未读数不是关键路径
+  }
+}
+
+function openNotificationDrawer() {
+  notifyVisible.value = true
+  loadNotifications(true)
+}
+
+async function loadMoreNotifications() {
+  notifyPage.value += 1
+  await loadNotifications(false)
+}
+
+async function markOneRead(item: NotificationItem) {
+  if (item.isRead) return
+  try {
+    await markNotificationReadApi(item.id)
+    item.isRead = true
+    unreadCount.value = Math.max(0, unreadCount.value - 1)
+  } catch {
+    // 拦截器已提示
+  }
+}
+
+async function markAllRead() {
+  try {
+    await markAllNotificationsReadApi()
+    notifications.value.forEach((item) => {
+      item.isRead = true
+    })
+    unreadCount.value = 0
+    ElMessage.success('已全部标为已读')
+  } catch {
+    // 拦截器已提示
+  }
+}
+
+onMounted(() => {
+  refreshUnreadCount()
+  unreadTimer = window.setInterval(refreshUnreadCount, 60000)
+})
+
+onBeforeUnmount(() => {
+  if (unreadTimer) clearInterval(unreadTimer)
+})
 
 function handleCommand(cmd: string) {
   if (cmd === 'password') {

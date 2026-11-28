@@ -151,6 +151,14 @@ func dispatchRequest(ctx: HttpContext): Unit {
         }
         if (path == "/api/v1/system/audit-logs" && method == "GET") { handleSystemAuditLogs(ctx); return }
 
+        // Notification routes
+        if (path == "/api/v1/notifications" && method == "GET") { handleNotificationList(ctx); return }
+        if (path == "/api/v1/notifications/read-all" && method == "POST") { handleNotificationReadAll(ctx); return }
+        if (segs.size == 5 && segs[0] == "api" && segs[1] == "v1" && segs[2] == "notifications" && segs[4] == "read" && method == "POST") {
+            let id = parseIntId(segs[3])
+            if (id > 0) { handleNotificationRead(ctx, id); return }
+        }
+
         sendErr(ctx, 404, 404, "接口不存在: ${method} ${path}")
     } catch (e: Exception) {
         sendErr(ctx, 500, 500, "服务器内部异常: ${e.message}")

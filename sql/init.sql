@@ -189,6 +189,20 @@ CREATE TABLE IF NOT EXISTS sys_audit_log (
     INDEX idx_audit_time (created_at)
 ) ENGINE=InnoDB COMMENT='操作审计日志表';
 
+-- 12. 站内消息通知表
+-- 审批通过/驳回、工资条发放等关键事件会给相关账号写一条通知，
+-- 前端顶栏铃铛拉取未读数与消息列表。
+CREATE TABLE IF NOT EXISTS sys_notification (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL COMMENT '接收人 sys_user.id',
+    title VARCHAR(128) NOT NULL COMMENT '消息标题',
+    content VARCHAR(500) NOT NULL DEFAULT '' COMMENT '消息正文',
+    biz_type VARCHAR(32) NOT NULL DEFAULT 'SYSTEM' COMMENT 'SYSTEM/APPROVAL/PAYROLL/CONTRACT',
+    is_read TINYINT NOT NULL DEFAULT 0 COMMENT '0未读 1已读',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_notify_user (user_id, is_read, created_at)
+) ENGINE=InnoDB COMMENT='站内消息通知表';
+
 -- ==========================================
 -- 初始演示数据（Seed Data）
 -- ==========================================
