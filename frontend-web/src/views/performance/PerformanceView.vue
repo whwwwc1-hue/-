@@ -43,7 +43,7 @@
       <el-table-column prop="finalScore" label="终评分" width="85" />
       <el-table-column prop="grade" label="评级" width="80">
         <template #default="{ row }">
-          <el-tag v-if="row.grade" :type="gradeTagType(row.grade)" size="small" effect="dark">{{ row.grade }}</el-tag>
+          <el-tag v-if="row.grade" :type="performanceGradeTagType(row.grade)" size="small" effect="dark">{{ row.grade }}</el-tag>
           <span v-else class="text-slate-400">-</span>
         </template>
       </el-table-column>
@@ -121,7 +121,7 @@
         <el-form-item label="最终得分" required>
           <div class="flex items-center gap-3">
             <el-input-number v-model="reviewForm.finalScore" :min="0" :max="100" />
-            <el-tag :type="gradeTagType(previewGrade.grade)" effect="dark">
+            <el-tag :type="performanceGradeTagType(previewGrade.grade)" effect="dark">
               预计评级 {{ previewGrade.grade }} · 奖金系数 {{ previewGrade.ratio }}x
             </el-tag>
           </div>
@@ -148,6 +148,7 @@ import {
   submitSelfEvalApi
 } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
+import { performanceGradeTagType, resolvePerformanceGrade } from '@/constants/performance'
 
 const auth = useAuthStore()
 const isHrOrAdmin = computed(() => auth.hasRole(['ADMIN', 'HR']))
@@ -181,14 +182,7 @@ const reviewForm = reactive({
   reviewerComment: ''
 })
 
-const previewGrade = computed(() => {
-  const s = Number(reviewForm.finalScore || 0)
-  if (s >= 90) return { grade: 'S', ratio: '1.20' }
-  if (s >= 80) return { grade: 'A', ratio: '1.10' }
-  if (s >= 70) return { grade: 'B', ratio: '1.00' }
-  if (s >= 60) return { grade: 'C', ratio: '0.80' }
-  return { grade: 'D', ratio: '0.50' }
-})
+const previewGrade = computed(() => resolvePerformanceGrade(Number(reviewForm.finalScore || 0)))
 
 function perfStatusLabel(s: string) {
   if (s === 'SELF_EVAL') return '待自评'
@@ -201,13 +195,6 @@ function perfTagType(s: string): 'warning' | 'primary' | 'success' {
   if (s === 'COMPLETED') return 'success'
   if (s === 'REVIEWING') return 'primary'
   return 'warning'
-}
-
-function gradeTagType(g: string): 'danger' | 'warning' | 'success' | 'info' {
-  if (g === 'S') return 'danger'
-  if (g === 'A') return 'success'
-  if (g === 'B') return 'warning'
-  return 'info'
 }
 
 async function loadList() {
