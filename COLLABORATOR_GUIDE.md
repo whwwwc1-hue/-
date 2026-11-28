@@ -6,7 +6,7 @@
 
 ## 一、项目当前完成度与整体架构总览
 
-本项目已完成 **全栈 MVP 至生产级完整闭环**：基于华为 **仓颉（Cangjie `1.0.5` + `stdx 1.0.5.1`）** 编写高性能 RESTful 后端服务，使用 **MySQL 8.0** 存储 11 张核心业务表，并通过 **Vue 3 + TypeScript + Vite 5 + Element Plus + Tailwind CSS + ECharts 5** 实现企业级响应式 Web 端管理后台。
+本项目已完成 **全栈 MVP 至生产级完整闭环**：基于华为 **仓颉（Cangjie `1.0.5` + `stdx 1.0.5.1`）** 编写高性能 RESTful 后端服务，使用 **MySQL 8.0** 存储 12 张核心业务表，并通过 **Vue 3 + TypeScript + Vite 5 + Element Plus + Tailwind CSS + ECharts 5** 实现企业级响应式 Web 端管理后台。
 
 ### 1.1 系统逻辑架构
 
@@ -29,7 +29,7 @@
                                     v
 +-----------------------------------------------------------------------+
 |  MySQL 8.0.42 (127.0.0.1:3306, utf8mb4_unicode_ci, hrms_db)           |
-|  11 张表：部门/岗位/员工/异动/用户/考勤/假勤/绩效/薪资/招聘/审计日志      |
+|  12 张表：部门/岗位/员工/异动/用户/考勤/假勤/绩效/薪资/招聘/审计日志/站内通知    |
 +-----------------------------------------------------------------------+
 ```
 
@@ -41,6 +41,8 @@
 - [x] **假勤审批与年假余额联动**：`ANNUAL` 年假审批通过后，自动从 `hr_employee.annual_leave_balance` 扣减对应天数。
 - [x] **绩效评级联动月度算薪**：`S/A/B/C/D` 自动映射奖金系数 `1.20/1.10/1.00/0.80/0.50`，自动计算加班补贴、考勤扣款、五险一金与超额累进个税，确认发薪后员工在「我的工资条」可查电子凭条。
 - [x] **前后端联合渲染**：`cjpm build`、`tsc --noEmit`、`vite build` 均 0 错误；浏览器实测 43 个请求 0 报错、ECharts 四表渲染正常。
+- [x] **站内消息通知**：假勤审批结果、工资条发放自动写入 `sys_notification`，顶栏铃铛展示未读角标，抽屉支持分页、逐条已读与一键全部已读。
+- [x] **前端质量门禁**：`vue-tsc` 覆盖 `.vue` 类型检查、Vitest 单元测试 10 例、GitHub Actions 流水线（`pnpm typecheck && pnpm test && pnpm build`）。
 
 ---
 
@@ -132,8 +134,9 @@ MYSQL_EXE=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
    cd frontend-web
    pnpm approve-builds -y esbuild vue-demi   # pnpm 10+/12+ 需允许 esbuild 与 vue-demi 执行 postinstall
    pnpm install
-   pnpm exec tsc --noEmit
-   pnpm build
+   pnpm typecheck                            # vue-tsc --noEmit，覆盖 .vue 页面
+   pnpm test                                 # Vitest 单元测试
+   pnpm build                                # 先 typecheck 再打包
    pnpm dev                                  # 启动于 http://127.0.0.1:5173
    ```
 
@@ -154,7 +157,7 @@ MYSQL_EXE=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 ├── start-backend.ps1                 # 一键检测/启动 MySQL、编译并运行仓颉后端
 ├── start-frontend.ps1                # 一键启动 Vite 前端服务
 ├── sql/
-│   └── init.sql                      # 11 张表 DDL 与 4 部门/5 岗位/5 员工/2 候选人种子数据
+│   └── init.sql                      # 12 张表 DDL 与 4 部门/5 岗位/5 员工/2 候选人种子数据
 ├── backend-cangjie/
 │   ├── cjpm.toml                     # cjc-version = "1.0.5"，链接 stdx 动态库
 │   ├── .env / .env.example           # 数据库与端口配置（注意：仓库含默认本地开发值）
@@ -171,16 +174,21 @@ MYSQL_EXE=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 │       │   ├── cors.cj               # 允许跨域与 OPTIONS 预检响应
 │       │   └── auth.cj               # requireAuth / requireRoles 权限校验与部门作用域辅助
 │       ├── service/audit_service.cj  # writeAuditLog 统一审计日志落库
-│       └── controller/               # 10 个核心业务控制器（详见第五节）
+│       ├── service/notification_service.cj # 站内消息推送（审批/发薪事件）
+│       └── controller/               # 11 个核心业务控制器（详见第五节，含 notification）
 └── frontend-web/
     ├── vite.config.ts                # 127.0.0.1:5173，代理 /api -> http://127.0.0.1:8080
-    ├── pnpm-workspace.yaml           # onlyBuiltDependencies: esbuild, vue-demi
+    ├── vitest.config.ts              # Vitest 单元测试配置（@ -> src 别名）
+    ├── pnpm-workspace.yaml           # packages 根包声明 + allowBuilds（esbuild/vue-demi）
     └── src/
-        ├── api/request.ts            # Axios 拦截器（自动带 Bearer Token、401 清态跳转登录）
+        ├── api/request.ts            # Axios 拦截器（自动带 Bearer Token、401 带 redirect 跳登录）
         ├── api/hrms.ts               # 全量接口函数与 TypeScript 类型
-        ├── stores/auth.ts            # Pinia AuthStore（持久化 token 与 user）
-        ├── router/index.ts           # RBAC 路由 meta.roles 动态守卫
-        ├── layout/AppLayout.vue      # 侧边栏角色过滤 + 顶栏个人信息 + 改密弹窗
+        ├── constants/attendance.ts   # 考勤状态枚举单一来源（防前后端漂移）
+        ├── utils/confirm.ts          # 二次确认封装（取消不再产生未处理拒绝）
+        ├── utils/date.ts             # 本地时区日期/月份格式化
+        ├── stores/auth.ts            # Pinia AuthStore（持久化 token 与 user，校验角色合法性）
+        ├── router/index.ts           # RBAC 路由 meta.roles 动态守卫 + redirect 回跳
+        ├── layout/AppLayout.vue      # 侧边栏角色过滤 + 顶栏通知铃铛 + 改密弹窗
         └── views/                    # 10 个核心业务页面（Login/Dashboard/Org/.../System）
 ```
 
@@ -202,7 +210,7 @@ MYSQL_EXE=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 
 ---
 
-## 四、数据库 11 张核心表字典与状态机
+## 四、数据库 12 张核心表字典与状态机
 
 | 表名 | 中文名 | 关键唯一键 / 索引 | 核心状态枚举 |
 | --- | --- | --- | --- |
@@ -217,6 +225,7 @@ MYSQL_EXE=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 | `hr_payroll` | 月度薪资核算表 | `UNIQUE(employee_id, pay_month)` | `DRAFT` -> `PAID` |
 | `hr_recruitment_candidate` | 招聘候选人表 | `idx_cand_stage` | `NEW` / `INTERVIEW` / `OFFER` / `HIRED` / `REJECTED` |
 | `sys_audit_log` | 安全审计日志表 | `idx_audit_time` | 记录关键写操作与登录记录 |
+| `sys_notification` | 站内消息通知表 | `idx_notify_user(user_id,is_read,created_at)` | `is_read`：0 未读 / 1 已读 |
 
 > **默认演示账号**（首次启动后端自动初始化，密码均为 `123456`）：
 > `admin`（员工 ID 1，总经办）、`hr`（员工 ID 2，人力资源部）、`manager`（员工 ID 3，技术研发中心）、`emp01`（员工 ID 4，技术研发中心）。
@@ -240,6 +249,7 @@ MYSQL_EXE=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 | 薪酬核算 | `POST /payrolls/{generate\|batch-pay}`、`GET /payrolls`、`PUT /payrolls/:id`、`POST /payrolls/:id/pay`、`GET /payrolls/my` | 核算发放 `ADMIN/HR` / 个人工资条全部 | 分页 / 个人数组 |
 | 招聘管理 | `GET/POST /candidates`、`PUT /candidates/:id`、`POST /candidates/:id/hire` | `ADMIN/HR` | 候选人数组 |
 | 系统审计 | `GET /system/users`、`PUT /system/users/:id`、`GET /system/audit-logs` | `ADMIN` | 用户数组 / 审计分页 |
+| 站内通知 | `GET /notifications`、`POST /notifications/:id/read`、`POST /notifications/read-all` | 全部已登录（仅本人消息） | `{ list, total, page, pageSize, unread }` / `null` |
 
 ### 5.2 核心业务核算公式（位于 `controller/performance_controller.cj` 与 `payroll_controller.cj`）
 
@@ -325,9 +335,10 @@ MYSQL_EXE=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 其余协作者可按以下 5 个独立工作包认领继续迭代，互相之间耦合度较低，适合并行开发与提交 PR：
 
 ### 工作包 A：自动化测试与 CI/CD（测试/工程化方向）
+- [x] **前端单元测试**：已接入 Vitest，覆盖日期工具（本地时区/跨年/月初边界）与考勤状态枚举（含防漂移断言），`pnpm test` 跑通 10 例。
+- [x] **GitHub Actions CI**：`.github/workflows/frontend-ci.yml` 在 push/PR 时执行 `pnpm install --frozen-lockfile && pnpm typecheck && pnpm test && pnpm build`。
 - [ ] **后端单元测试**：在 `backend-cangjie/src/` 下使用仓颉 `@Test` 框架补充 `jwt_util` 签名校验、个税分段算薪函数 `calculateTax`、绩效评级映射测试，跑通 `cjpm test`。
 - [ ] **前端 Playwright E2E 测试**：覆盖四大角色登录、菜单隔离、弹窗提交表单、薪资生成与工资条核对自动化脚本。
-- [ ] **GitHub Actions CI**：在 `.github/workflows/` 增加前端 `pnpm install && pnpm exec tsc --noEmit && pnpm build` 自动检查流水线。
 
 ### 工作包 B：数据导入导出与文档打印（前端体验增强）
 - [ ] **员工花名册 Excel/CSV 批量导入**：前端解析 `.csv` / `.xlsx` 后批量调用或新增 `POST /api/v1/employees/import` 批量入库。
@@ -336,7 +347,7 @@ MYSQL_EXE=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 
 ### 工作包 C：多级审批与通知提醒中心（业务流深化）
 - [ ] **请假长假二级审批**：当请假 `duration > 3` 天时，需先由 `MANAGER` 初审、再由 `HR` 复审后生效（扩展 `hr_leave_overtime.status` 状态机为 `PENDING_MGR -> PENDING_HR -> APPROVED`）。
-- [ ] **站内消息通知中心**：新增 `sys_notification` 表，在合同 30 天内到期、审批通过/驳回、月度工资条发放时自动生成未读红点消息，在 `AppLayout.vue` 顶栏展示通知铃铛抽屉。
+- [x] **站内消息通知中心**：已新增 `sys_notification` 表；审批通过/驳回、工资条发放自动生成消息，`AppLayout.vue` 顶栏提供带未读角标的铃铛与抽屉（分页、逐条已读、一键全部已读）。
 
 ### 工作包 D：新 HR 业务子模块扩展（全栈功能扩展）
 - [ ] **培训与课程学分管理（`hr_training` / `hr_training_record`）**：支持 HR 发布培训、员工报名签到、学分统计。
@@ -367,5 +378,37 @@ MYSQL_EXE=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 3. **推送与发起 PR 前检查清单**：
    - 确认没有把 `mysql-data/`、`node_modules/`、`dist/`、`target/`、`*.exe` 提交进版本库（可执行 `git status` 检查）。
    - 修改过 `.cj` 文件必须执行过 `cjpm build` 确认通过。
-   - 修改过 `.ts`/`.vue` 文件必须执行过 `pnpm exec tsc --noEmit && pnpm build` 确认通过。
+   - 修改过 `.ts`/`.vue` 文件必须执行过 `pnpm typecheck && pnpm test && pnpm build` 确认通过。
 4. **发起 Pull Request**：在 PR 描述中写明改动模块、涉及新增 SQL（若有）以及本地自测截图或命令结果，由仓库负责人 Review 后 Merge 至 `main`。
+
+---
+
+## 九、本轮迭代记录（按提交拆分，可直接用于答辩说明）
+
+本轮迭代共 12 个提交，按「工程化 → 缺陷修复 → 新功能 → 测试/CI → 文档」的顺序推进，每个提交只做一件事，便于逐条回溯：
+
+| 提交类型 | 内容 | 关键文件 |
+| --- | --- | --- |
+| `chore(build)` | 补齐 pnpm 工作区 `packages` 字段；接入 `vue-tsc` 与 Vitest，`build` 前先做类型检查 | `pnpm-workspace.yaml`、`package.json` |
+| `fix(employee)` | 修复「编辑员工档案必然 400」；更新改为补丁语义，未提交的月薪/年假/试用期不再被清零 | `employee_controller.cj`、`employee/EmployeeView.vue` |
+| `fix(attendance)` | 统一考勤状态枚举（`EARLY_LEAVE`/`LATE_AND_EARLY`）；修复按日筛选失效；补卡不再清零迟到早退分钟 | `attendance_controller.cj`、`constants/attendance.ts` |
+| `fix(system)` | 重置密码不再顺带启用已停用账号；角色白名单校验；禁止停用当前登录账号 | `system_controller.cj` |
+| `fix(approval)` | 禁止审批本人申请；服务端校验假勤时长与起止时间；审批改为条件更新避免重复扣年假 | `request_controller.cj` |
+| `fix(db)` | SQL 失败不再静默返回 200，统一抛异常转 500；审计日志失败不影响主业务 | `mysql_pool.cj`、`audit_service.cj` |
+| `feat(notification)` | 新增站内消息通知中心（表 + 3 个接口 + 审批/发薪事件接入 + 顶栏铃铛抽屉） | `notification_*.cj`、`AppLayout.vue`、`init.sql` |
+| `fix(auth)` | 修复非法角色导致的无限重定向白屏；401 后登录可回到原页面 | `router/index.ts`、`stores/auth.ts`、`request.ts` |
+| `fix(ui)` | 统一 `confirmAction` 消除取消操作的未处理拒绝；日期默认值改本地时区；默认考核周期/发薪月份动态取值 | `utils/*`、各 `views/*.vue` |
+| `test(frontend)` | Vitest 单元测试 10 例（日期边界、考勤枚举防漂移） | `vitest.config.ts`、`*.spec.ts` |
+| `ci` | GitHub Actions：安装 → 类型检查 → 单测 → 构建 | `.github/workflows/frontend-ci.yml` |
+| `docs` | 同步 README 与本文档（新模块、新表、新命令、任务清单状态） | `README.md`、本文档 |
+
+**自测方式**（本机无仓颉 SDK，后端为静态审查 + 前端真实构建）：
+
+```powershell
+cd frontend-web
+pnpm typecheck   # 0 error
+pnpm test        # 10 passed
+pnpm build       # 构建成功
+```
+
+后端改动请在具备仓颉环境的机器上执行 `cjpm build` 复核；本轮后端改动均为「读现值再覆盖 / 条件更新 / 抛异常」这类局部改造，未改动包结构与 `cjpm.toml`。

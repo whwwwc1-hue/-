@@ -15,6 +15,7 @@
 | 数据库 | MySQL `8.0.42`（`utf8mb4`，11 张业务核心表） |
 | 前端框架 | Vue `3.5` + TypeScript + Vite `5` + Pinia + Vue Router `4` |
 | UI 与可视化 | Element Plus + `@element-plus/icons-vue` + Tailwind CSS + ECharts `5` |
+| 质量保障 | `vue-tsc` 类型检查（覆盖 `.vue`）+ Vitest 单元测试 + GitHub Actions 前端流水线 |
 
 ---
 
@@ -44,10 +45,16 @@ hrms-cangjie/
 │       ├── router/           # RBAC 动态路由守卫
 │       ├── layout/           # 侧边栏+顶栏布局与改密弹窗
 │       └── views/            # 登录与 9 大核心业务视图
-├── sql/init.sql              # 11 张业务表结构与初始种子数据
+├── sql/init.sql              # 12 张业务表结构与初始种子数据（含站内通知表）
+├── .github/workflows/        # GitHub Actions：前端类型检查 + 单元测试 + 构建
 ├── start-backend.ps1         # 一键启动 MySQL + 仓颉后端（8080）
 └── start-frontend.ps1        # 一键启动前端开发服务器（5173）
 ```
+
+前端源码内新增两个约定目录，改动时请优先复用：
+
+- `frontend-web/src/constants/`：枚举单一来源（如考勤状态），避免前后端枚举漂移
+- `frontend-web/src/utils/`：跨页面复用的小工具（二次确认弹窗、本地时区日期）
 
 ---
 
@@ -93,3 +100,22 @@ hrms-cangjie/
 3. **智能考勤与补卡**：实时上下班签到/签退判别迟到/早退，HR 支持异常补卡修正。
 4. **假勤审批与年假联动**：员工提交年假申请，部门经理/HR 审批通过后自动扣减员工可用年假余额。
 5. **绩效评估联动月度计薪**：周期内完成自评与主管评分（`S=1.2 / A=1.1 / B=1.0 / C=0.8 / D=0.5`），月度薪资核算自动按公式计算奖金、五险一金与累计超额个税，发薪后员工可在「我的工资条」查看电子凭条。
+6. **站内消息通知**：假勤审批结果、工资条发放会自动写入 `sys_notification`，顶栏铃铛展示未读角标，抽屉内可分页查看、逐条或一键标记已读。
+
+---
+
+## 六、质量保障与常用命令
+
+前端已接入 `.vue` 级类型检查与单元测试，三条命令都可以在 `frontend-web` 目录直接执行：
+
+```powershell
+cd frontend-web
+pnpm install        # 首次拉取代码后安装依赖
+pnpm typecheck      # vue-tsc --noEmit，覆盖 10 个页面与所有 .ts
+pnpm test           # Vitest 单元测试（日期工具、考勤枚举等）
+pnpm build          # 先类型检查再 vite build
+```
+
+后端改动没有纳入 CI：仓颉 SDK 未预装在 GitHub runner 上，请按 [COLLABORATOR_GUIDE.md](./COLLABORATOR_GUIDE.md) 在本地 `cjpm build` 自测后再提交。
+
+数据库如需在已有环境升级，直接重跑 `sql/init.sql` 即可：全部建表语句均为 `CREATE TABLE IF NOT EXISTS`，种子数据为 `INSERT IGNORE`，不会覆盖现有业务数据。
