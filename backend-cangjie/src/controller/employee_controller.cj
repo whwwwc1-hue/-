@@ -272,24 +272,71 @@ public func handleEmployeeUpdate(ctx: HttpContext, empId: Int64): Unit {
                     sendErr(ctx, 400, 400, "请求体 JSON 格式错误")
                     return
                 case Some(obj) =>
-                    let name = getJsonStr(obj, "name", "").trimAscii()
-                    let gender = getJsonInt(obj, "gender", 1)
-                    let phone = getJsonStr(obj, "phone", "").trimAscii()
-                    let email = getJsonStr(obj, "email", "").trimAscii()
-                    let deptId = getJsonInt(obj, "deptId", 0)
-                    let posId = getJsonInt(obj, "positionId", 0)
-                    let posName = getJsonStr(obj, "positionName", "").trimAscii()
-                    let baseSalary = getJsonFloat(obj, "baseSalary", 0.0)
-                    let annualLeave = getJsonFloat(obj, "annualLeaveBalance", 5.0)
-                    let contractEndDate = getJsonStr(obj, "contractEndDate", "").trimAscii()
-                    let probEndDate = getJsonStr(obj, "probationEndDate", "").trimAscii()
+                    // 先读出库里现值：更新接口采用「字段存在才覆盖」的补丁语义，
+                    // 避免前端只提交部分字段时把月薪、年假、试用期日期等静默清零。
+                    let existRows = queryRows("""
+SELECT e.name, e.gender, e.phone, IFNULL(e.email, ''), e.dept_id, IFNULL(e.position_id, 0), e.position_name,
+       e.base_salary, e.annual_leave_balance,
+       IFNULL(DATE_FORMAT(e.probation_end_date, '%Y-%m-%d'), ''),
+       IFNULL(DATE_FORMAT(e.contract_end_date, '%Y-%m-%d'), ''),
+       IFNULL(DATE_FORMAT(e.hire_date, '%Y-%m-%d'), ''), e.status
+FROM hr_employee e
+WHERE e.id = ${empId} LIMIT 1
+""")
+                    if (existRows.size == 0) {
+                        sendErr(ctx, 404, 404, "员工不存在")
+                        return
+                    }
+                    let cur = existRows[0]
+                    var name = cur[0]
+                    var gender = Int64.tryParse(cur[1]) ?? 1
+                    var phone = cur[2]
+                    var email = cur[3]
+                    var deptId = Int64.tryParse(cur[4]) ?? 0
+                    var posId = Int64.tryParse(cur[5]) ?? 0
+                    var posName = cur[6]
+                    var baseSalary = Float64.tryParse(cur[7]) ?? 0.0
+                    var annualLeave = Float64.tryParse(cur[8]) ?? 0.0
+                    var probEndDate = cur[9]
+                    var contractEndDate = cur[10]
+                    var hireDate = cur[11]
+                    var status = cur[12]
+
+                    if (hasJsonKey(obj, "name")) { name = getJsonStr(obj, "name", name).trimAscii() }
+                    if (hasJsonKey(obj, "gender")) { gender = getJsonInt(obj, "gender", gender) }
+                    if (hasJsonKey(obj, "phone")) { phone = getJsonStr(obj, "phone", phone).trimAscii() }
+                    if (hasJsonKey(obj, "email")) { email = getJsonStr(obj, "email", email).trimAscii() }
+                    if (hasJsonKey(obj, "deptId")) { deptId = getJsonInt(obj, "deptId", deptId) }
+                    if (hasJsonKey(obj, "positionId")) { posId = getJsonInt(obj, "positionId", posId) }
+                    if (hasJsonKey(obj, "positionName")) { posName = getJsonStr(obj, "positionName", posName).trimAscii() }
+                    if (hasJsonKey(obj, "baseSalary")) { baseSalary = getJsonFloat(obj, "baseSalary", baseSalary) }
+                    if (hasJsonKey(obj, "annualLeaveBalance")) { annualLeave = getJsonFloat(obj, "annualLeaveBalance", annualLeave) }
+                    if (hasJsonKey(obj, "probationEndDate")) { probEndDate = getJsonStr(obj, "probationEndDate", probEndDate).trimAscii() }
+                    if (hasJsonKey(obj, "contractEndDate")) { contractEndDate = getJsonStr(obj, "contractEndDate", contractEndDate).trimAscii() }
+                    if (hasJsonKey(obj, "hireDate")) { hireDate = getJsonStr(obj, "hireDate", hireDate).trimAscii() }
+                    if (hasJsonKey(obj, "status")) { status = getJsonStr(obj, "status", status).trimAscii() }
+
+                    if (posName.isEmpty() && posId > 0) {
+                        posName = querySingleValue("SELECT pos_name FROM hr_position WHERE id = ${posId}")
+                    }
                     if (name.isEmpty() || phone.isEmpty() || deptId <= 0 || posName.isEmpty()) {
-                        sendErr(ctx, 400, 400, "姓名、手机号、部门、岗位必填")
+                        sendErr(ctx, 400, 400, "姓名、手机号、部门和岗位不能为空")
+                        return
+                    }
+                    if (status != "PROBATION" && status != "ACTIVE" && status != "RESIGNED") {
+                        sendErr(ctx, 400, 400, "员工状态取值非法（仅支持 PROBATION/ACTIVE/RESIGNED）")
+                        return
+                    }
+                    if (baseSalary < 0.0 || annualLeave < 0.0) {
+                        sendErr(ctx, 400, 400, "月薪与剩余年假不能为负数")
                         return
                     }
                     let posIdSql = if (posId > 0) { "${posId}" } else { "NULL" }
-                    let sql = "UPDATE hr_employee SET name=${sqlStr(name)}, gender=${gender}, phone=${sqlStr(phone)}, email=${sqlNullableStr(email)}, dept_id=${deptId}, position_id=${posIdSql}, position_name=${sqlStr(posName)}, base_salary=${formatNum2(baseSalary)}, annual_leave_balance=${formatNum2(annualLeave)}, probation_end_date=${sqlNullableStr(probEndDate)}, contract_end_date=${sqlNullableStr(contractEndDate)} WHERE id=${empId}"
-                    executeSql(sql)
+                    let sql = "UPDATE hr_employee SET name=${sqlStr(name)}, gender=${gender}, phone=${sqlStr(phone)}, email=${sqlNullableStr(email)}, dept_id=${deptId}, position_id=${posIdSql}, position_name=${sqlStr(posName)}, base_salary=${formatNum2(baseSalary)}, annual_leave_balance=${formatNum2(annualLeave)}, hire_date=IF(${sqlStr(hireDate)} = '', hire_date, ${sqlStr(hireDate)}), probation_end_date=${sqlNullableStr(probEndDate)}, contract_end_date=${sqlNullableStr(contractEndDate)}, status=${sqlStr(status)} WHERE id=${empId}"
+                    if (!executeSql(sql)) {
+                        sendErr(ctx, 500, 500, "员工档案更新失败")
+                        return
+                    }
                     writeAuditLog(u, "员工管理", "修改档案", "更新员工 ${name} (ID=${empId}) 基础信息")
                     sendOk(ctx, "{\"id\":${empId}}")
             }

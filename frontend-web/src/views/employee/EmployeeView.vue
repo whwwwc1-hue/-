@@ -413,6 +413,7 @@ async function submitEmp() {
   }
   submitLoading.value = true
   try {
+    const pos = positions.value.find((p) => p.id === empForm.positionId)
     const payload: any = {
       name: empForm.name.trim(),
       gender: empForm.gender,
@@ -420,6 +421,7 @@ async function submitEmp() {
       email: empForm.email.trim(),
       deptId: empForm.deptId,
       positionId: empForm.positionId,
+      positionName: pos?.posName || '',
       baseSalary: empForm.baseSalary,
       status: empForm.status,
       hireDate: empForm.hireDate,

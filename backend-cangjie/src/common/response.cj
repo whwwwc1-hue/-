@@ -73,6 +73,15 @@ public func parseJsonObject(body: String): Option<JsonObject> {
     }
 }
 
+/// 判断请求体里是否显式携带了某个字段。
+/// 更新类接口需要用它区分「字段缺省，保持原值」与「字段为空串，主动清空」。
+public func hasJsonKey(obj: JsonObject, key: String): Bool {
+    match (obj.get(key)) {
+        case Some(_) => return true
+        case None => return false
+    }
+}
+
 public func getJsonStr(obj: JsonObject, key: String, def: String): String {
     match (obj.get(key)) {
         case Some(v) =>
