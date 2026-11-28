@@ -57,20 +57,46 @@ public func handleSystemUserUpdate(ctx: HttpContext, targetUserId: Int64): Unit 
                     return
                 case Some(obj) =>
                     let role = getJsonStr(obj, "role", "").trimAscii()
-                    let isActive = getJsonBool(obj, "isActive", true)
                     let resetPwd = getJsonBool(obj, "resetPassword", false)
                     let sets = ArrayList<String>()
-                    if (!role.isEmpty()) {
+                    if (hasJsonKey(obj, "role") && !role.isEmpty()) {
+                        let allowedRoles = ["ADMIN", "HR", "MANAGER", "EMPLOYEE"]
+                        var roleOk = false
+                        for (r in allowedRoles) {
+                            if (role == r) { roleOk = true }
+                        }
+                        if (!roleOk) {
+                            sendErr(ctx, 400, 400, "角色取值非法（仅支持 ADMIN/HR/MANAGER/EMPLOYEE）")
+                            return
+                        }
                         sets.add("role=${sqlStr(role)}")
                     }
-                    let activeVal = if (isActive) { 1 } else { 0 }
-                    sets.add("is_active=${activeVal}")
+                    // 只有请求体里显式带了 isActive 才改启用状态：
+                    // 「重置密码」这类操作不该顺手把已停用（如离职）账号重新启用。
+                    var activeDesc = "未变更"
+                    if (hasJsonKey(obj, "isActive")) {
+                        let isActive = getJsonBool(obj, "isActive", true)
+                        if (!isActive && targetUserId == u.userId) {
+                            sendErr(ctx, 400, 400, "不能停用当前登录的账号")
+                            return
+                        }
+                        let activeVal = if (isActive) { 1 } else { 0 }
+                        sets.add("is_active=${activeVal}")
+                        activeDesc = "${activeVal}"
+                    }
                     if (resetPwd) {
                         sets.add("password_hash=${sqlStr(hashPassword("123456"))}")
                     }
+                    if (sets.size == 0) {
+                        sendErr(ctx, 400, 400, "请求体中没有需要更新的字段")
+                        return
+                    }
                     let sql = "UPDATE sys_user SET " + String.join(sets.toArray(), delimiter: ", ") + " WHERE id=${targetUserId}"
-                    executeSql(sql)
-                    writeAuditLog(u, "系统管理", "更新账号权限", "更新账号 ${targetUsername} (ID=${targetUserId})：role=${role}, isActive=${activeVal}, resetPwd=${resetPwd}")
+                    if (!executeSql(sql)) {
+                        sendErr(ctx, 500, 500, "账号更新失败")
+                        return
+                    }
+                    writeAuditLog(u, "系统管理", "更新账号权限", "更新账号 ${targetUsername} (ID=${targetUserId})：role=${role}, isActive=${activeDesc}, resetPwd=${resetPwd}")
                     sendOk(ctx, "null")
             }
     }
