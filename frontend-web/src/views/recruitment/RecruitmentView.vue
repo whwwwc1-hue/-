@@ -146,6 +146,7 @@ import {
   hireCandidateApi,
   updateCandidateApi
 } from '@/api/hrms'
+import { formatDate } from '@/utils/date'
 
 const loading = ref(false)
 const submitLoading = ref(false)
@@ -183,7 +184,7 @@ const hireForm = reactive({
   candId: 0,
   candName: '',
   baseSalary: 18000,
-  hireDate: new Date().toISOString().slice(0, 10),
+  hireDate: formatDate(),
   status: 'PROBATION',
   username: ''
 })
@@ -290,7 +291,7 @@ function openHireDialog(row: any) {
   hireForm.candId = row.id
   hireForm.candName = row.name
   hireForm.baseSalary = Number(row.expectedSalary || 18000)
-  hireForm.hireDate = new Date().toISOString().slice(0, 10)
+  hireForm.hireDate = formatDate()
   hireForm.status = 'PROBATION'
   hireForm.username = ''
   hireDialogVisible.value = true

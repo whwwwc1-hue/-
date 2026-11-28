@@ -156,10 +156,17 @@ const canReview = computed(() => auth.hasRole(['ADMIN', 'HR', 'MANAGER']))
 const loading = ref(false)
 const submitLoading = ref(false)
 const list = ref<any[]>([])
-const filters = reactive({ cycleName: '2026-Q4', status: '' })
+
+/** 默认考核周期取当前季度（如 2026-Q4），避免硬编码导致跨季度后页面永远空列表。 */
+function currentQuarter(): string {
+  const now = new Date()
+  return `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`
+}
+
+const filters = reactive({ cycleName: currentQuarter(), status: '' })
 
 const initDialogVisible = ref(false)
-const initForm = reactive({ cycleName: '2026-Q4' })
+const initForm = reactive({ cycleName: currentQuarter() })
 
 const selfDialogVisible = ref(false)
 const selfForm = reactive({ id: 0, cycleName: '', selfScore: 85, selfSummary: '' })
@@ -216,7 +223,7 @@ async function loadList() {
 }
 
 function openInitDialog() {
-  initForm.cycleName = filters.cycleName || '2026-Q4'
+  initForm.cycleName = filters.cycleName || currentQuarter()
   initDialogVisible.value = true
 }
 

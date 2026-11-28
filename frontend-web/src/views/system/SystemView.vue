@@ -99,8 +99,9 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { getAuditLogsApi, getSystemUsersApi, updateSystemUserApi } from '@/api/hrms'
+import { confirmAction } from '@/utils/confirm'
 
 const activeTab = ref('users')
 const usersLoading = ref(false)
@@ -175,9 +176,8 @@ async function submitUserUpdate() {
 }
 
 async function handleResetPwd(row: any) {
-  await ElMessageBox.confirm(`确认将账号「${row.username}」的登录密码重置为 123456 吗？`, '重置密码确认', {
-    type: 'warning'
-  })
+  const ok = await confirmAction(`确认将账号「${row.username}」的登录密码重置为 123456 吗？`, '重置密码确认')
+  if (!ok) return
   await updateSystemUserApi(row.id, { resetPassword: true })
   ElMessage.success(`账号 ${row.username} 密码已重置为 123456`)
 }

@@ -205,6 +205,7 @@ import {
   attendanceStatusLabel as attStatusLabel,
   attendanceStatusTagType as attTagType
 } from '@/constants/attendance'
+import { formatMonth } from '@/utils/date'
 
 const auth = useAuthStore()
 const canManageAttendance = computed(() => auth.hasRole(['ADMIN', 'HR', 'MANAGER']))
@@ -217,7 +218,7 @@ let timer: number | undefined
 const todayAtt = ref<any>(null)
 const clockLoading = ref(false)
 
-const myMonth = ref(new Date().toISOString().slice(0, 7))
+const myMonth = ref(formatMonth())
 const myLoading = ref(false)
 const myList = ref<any[]>([])
 const mySummary = ref<any>({})

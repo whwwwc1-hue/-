@@ -139,7 +139,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import {
   createDeptApi,
   createPositionApi,
@@ -150,6 +150,7 @@ import {
   updateDeptApi,
   updatePositionApi
 } from '@/api/hrms'
+import { confirmAction } from '@/utils/confirm'
 
 const activeTab = ref('dept')
 const deptLoading = ref(false)
@@ -260,9 +261,8 @@ async function submitDept() {
 }
 
 async function handleDeleteDept(row: any) {
-  await ElMessageBox.confirm(`确认删除部门「${row.deptName}」吗？若存在子部门或员工将无法删除。`, '删除确认', {
-    type: 'warning'
-  })
+  const ok = await confirmAction(`确认删除部门「${row.deptName}」吗？若存在子部门或员工将无法删除。`, '删除确认')
+  if (!ok) return
   await deleteDeptApi(row.id)
   ElMessage.success('部门已删除')
   await loadDepts()
@@ -319,7 +319,8 @@ async function submitPos() {
 }
 
 async function handleDeletePos(row: any) {
-  await ElMessageBox.confirm(`确认删除岗位「${row.posName}」吗？`, '删除确认', { type: 'warning' })
+  const ok = await confirmAction(`确认删除岗位「${row.posName}」吗？`, '删除确认')
+  if (!ok) return
   await deletePositionApi(row.id)
   ElMessage.success('岗位已删除')
   await loadPositions()

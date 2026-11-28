@@ -197,7 +197,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import {
   approveRequestApi,
   cancelRequestApi,
@@ -206,6 +206,8 @@ import {
   getRequestListApi
 } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
+import { confirmAction } from '@/utils/confirm'
+import { formatDate } from '@/utils/date'
 
 const auth = useAuthStore()
 const canApprove = computed(() => auth.hasRole(['ADMIN', 'HR', 'MANAGER']))
@@ -304,7 +306,7 @@ function onCategoryChange(val: string) {
 }
 
 function openCreateDialog() {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = formatDate()
   createForm.category = 'LEAVE'
   createForm.subType = 'ANNUAL'
   createForm.startTime = `${today} 09:00:00`
@@ -339,7 +341,8 @@ async function submitCreate() {
 }
 
 async function handleCancel(row: any) {
-  await ElMessageBox.confirm('确认撤回该待审批申请单吗？', '撤回确认', { type: 'warning' })
+  const ok = await confirmAction('确认撤回该待审批申请单吗？', '撤回确认')
+  if (!ok) return
   await cancelRequestApi(row.id)
   ElMessage.success('已撤回申请')
   await loadMyRequests()
@@ -356,7 +359,8 @@ function openApproveDialog(row: any, action: 'APPROVED' | 'REJECTED') {
 
 async function submitApprove() {
   if (approveForm.action === 'REJECTED') {
-    await ElMessageBox.confirm(`确认驳回「${approveForm.empName}」的申请吗？`, '驳回确认', { type: 'warning' })
+    const ok = await confirmAction(`确认驳回「${approveForm.empName}」的申请吗？`, '驳回确认')
+    if (!ok) return
   }
   submitLoading.value = true
   try {

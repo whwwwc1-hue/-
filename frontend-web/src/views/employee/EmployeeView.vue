@@ -243,7 +243,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import {
   createEmployeeApi,
   getDeptTreeApi,
@@ -255,6 +255,8 @@ import {
   updateEmployeeApi
 } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
+import { confirmAction } from '@/utils/confirm'
+import { formatDate } from '@/utils/date'
 
 const auth = useAuthStore()
 const isHrOrAdmin = computed(() => auth.hasRole(['ADMIN', 'HR']))
@@ -299,7 +301,7 @@ const empForm = reactive({
   positionId: undefined as number | undefined,
   baseSalary: 12000,
   status: 'PROBATION',
-  hireDate: new Date().toISOString().slice(0, 10),
+  hireDate: formatDate(),
   contractEndDate: '',
   createAccount: true,
   username: ''
@@ -314,7 +316,7 @@ const transferForm = reactive({
   afterPositionId: 1,
   afterPosition: '',
   afterSalary: 12000,
-  effectiveDate: new Date().toISOString().slice(0, 10),
+  effectiveDate: formatDate(),
   remark: ''
 })
 
@@ -322,7 +324,7 @@ const resignDialogVisible = ref(false)
 const resignTargetName = ref('')
 const resignForm = reactive({
   employeeId: 0,
-  resignDate: new Date().toISOString().slice(0, 10),
+  resignDate: formatDate(),
   resignReason: ''
 })
 
@@ -383,7 +385,7 @@ function openCreateDialog() {
   empForm.positionId = positions.value[0]?.id
   empForm.baseSalary = 12000
   empForm.status = 'PROBATION'
-  empForm.hireDate = new Date().toISOString().slice(0, 10)
+  empForm.hireDate = formatDate()
   empForm.contractEndDate = ''
   empForm.createAccount = true
   empForm.username = ''
@@ -452,7 +454,7 @@ function openTransferDialog(row: any) {
   transferForm.afterPositionId = row.positionId
   transferForm.afterPosition = row.positionName
   transferForm.afterSalary = Number(row.baseSalary || 0)
-  transferForm.effectiveDate = new Date().toISOString().slice(0, 10)
+  transferForm.effectiveDate = formatDate()
   transferForm.remark = ''
   transferDialogVisible.value = true
 }
@@ -485,15 +487,13 @@ async function submitTransfer() {
 function openResignDialog(row: any) {
   resignTargetName.value = row.name
   resignForm.employeeId = row.id
-  resignForm.resignDate = new Date().toISOString().slice(0, 10)
+  resignForm.resignDate = formatDate()
   resignForm.resignReason = ''
   resignDialogVisible.value = true
 }
 
 async function submitResign() {
-  await ElMessageBox.confirm(`确认将员工「${resignTargetName.value}」办理离职并停用关联系统账号吗？`, '离职确认', {
-    type: 'warning'
-  })
+  if (!(await confirmAction(`确认将员工「${resignTargetName.value}」办理离职并停用关联系统账号吗？`, '离职确认'))) return
   submitLoading.value = true
   try {
     await resignEmployeeApi(resignForm.employeeId, {

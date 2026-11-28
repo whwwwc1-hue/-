@@ -153,7 +153,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import {
   batchPayPayrollApi,
   generatePayrollApi,
@@ -163,6 +163,8 @@ import {
   updatePayrollApi
 } from '@/api/hrms'
 import { useAuthStore } from '@/stores/auth'
+import { confirmAction } from '@/utils/confirm'
+import { formatMonth } from '@/utils/date'
 
 const auth = useAuthStore()
 const isHrOrAdmin = computed(() => auth.hasRole(['ADMIN', 'HR']))
@@ -176,7 +178,7 @@ const list = ref<any[]>([])
 const myList = ref<any[]>([])
 
 const filters = reactive({
-  payMonth: '2026-11',
+  payMonth: formatMonth(),
   keyword: '',
   status: ''
 })
@@ -275,9 +277,8 @@ async function submitEdit() {
 }
 
 async function handlePaySingle(row: any) {
-  await ElMessageBox.confirm(`确认向「${row.empName}」发放 ${row.payMonth} 工资 ￥${row.netSalary} 吗？`, '发薪确认', {
-    type: 'warning'
-  })
+  const ok = await confirmAction(`确认向「${row.empName}」发放 ${row.payMonth} 工资 ￥${row.netSalary} 吗？`, '发薪确认')
+  if (!ok) return
   opLoading.value = true
   try {
     await paySinglePayrollApi(row.id)
@@ -294,9 +295,8 @@ async function handleBatchPay() {
     ElMessage.warning('请先选择发薪月份')
     return
   }
-  await ElMessageBox.confirm(`确认将 ${filters.payMonth} 所有草稿状态的薪资记录批量标记为「已发放」吗？`, '批量发薪确认', {
-    type: 'warning'
-  })
+  const ok = await confirmAction(`确认将 ${filters.payMonth} 所有草稿状态的薪资记录批量标记为「已发放」吗？`, '批量发薪确认')
+  if (!ok) return
   opLoading.value = true
   try {
     const res = await batchPayPayrollApi({ payMonth: filters.payMonth })
