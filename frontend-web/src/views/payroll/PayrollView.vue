@@ -133,20 +133,28 @@
 
     <!-- Electronic Payslip Modal -->
     <el-dialog v-model="slipVisible" title="月度电子工资条明细" width="460px">
-      <el-descriptions v-if="activeSlip" :column="1" border size="small">
-        <el-descriptions-item label="发薪月份">{{ activeSlip.payMonth }}</el-descriptions-item>
-        <el-descriptions-item label="员工姓名">{{ activeSlip.empName }} ({{ activeSlip.empNo }})</el-descriptions-item>
-        <el-descriptions-item label="基本工资">￥{{ activeSlip.baseSalary }}</el-descriptions-item>
-        <el-descriptions-item label="绩效奖金">￥{{ activeSlip.bonus }}</el-descriptions-item>
-        <el-descriptions-item label="加班费补贴">￥{{ activeSlip.overtimePay }}</el-descriptions-item>
-        <el-descriptions-item label="考勤扣款">-￥{{ activeSlip.attendanceDeduction }}</el-descriptions-item>
-        <el-descriptions-item label="五险一金个人部分">-￥{{ activeSlip.socialSecurity }}</el-descriptions-item>
-        <el-descriptions-item label="个人所得税">-￥{{ activeSlip.tax }}</el-descriptions-item>
-        <el-descriptions-item label="实发净额">
-          <span class="text-lg font-bold text-emerald-600">￥{{ activeSlip.netSalary }}</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="备注">{{ activeSlip.remark || '-' }}</el-descriptions-item>
-      </el-descriptions>
+      <div class="payslip-print-area">
+        <el-descriptions v-if="activeSlip" :column="1" border size="small">
+          <el-descriptions-item label="发薪月份">{{ activeSlip.payMonth }}</el-descriptions-item>
+          <el-descriptions-item label="员工姓名">{{ activeSlip.empName }} ({{ activeSlip.empNo }})</el-descriptions-item>
+          <el-descriptions-item label="基本工资">￥{{ activeSlip.baseSalary }}</el-descriptions-item>
+          <el-descriptions-item label="绩效奖金">￥{{ activeSlip.bonus }}</el-descriptions-item>
+          <el-descriptions-item label="加班费补贴">￥{{ activeSlip.overtimePay }}</el-descriptions-item>
+          <el-descriptions-item label="考勤扣款">-￥{{ activeSlip.attendanceDeduction }}</el-descriptions-item>
+          <el-descriptions-item label="五险一金个人部分">-￥{{ activeSlip.socialSecurity }}</el-descriptions-item>
+          <el-descriptions-item label="个人所得税">-￥{{ activeSlip.tax }}</el-descriptions-item>
+          <el-descriptions-item label="实发净额">
+            <span class="text-lg font-bold text-emerald-600">￥{{ activeSlip.netSalary }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="备注">{{ activeSlip.remark || '-' }}</el-descriptions-item>
+        </el-descriptions>
+      </div>
+      <template #footer>
+        <div class="print:hidden">
+          <el-button @click="slipVisible = false">关闭</el-button>
+          <el-button type="primary" icon="Printer" @click="printPayslip">打印工资条</el-button>
+        </div>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -335,6 +343,10 @@ function exportCsv() {
 function openSlipModal(row: any) {
   activeSlip.value = row
   slipVisible.value = true
+}
+
+function printPayslip() {
+  window.print()
 }
 
 onMounted(() => {
